@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
+use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sui_protocol_config_macros::{ProtocolConfigFeatureFlagsGetters, ProtocolConfigGetters};
@@ -236,12 +237,16 @@ struct FeatureFlags {
     // regardless of their previous state in the store.
     #[serde(skip_serializing_if = "is_false")]
     simplified_unwrap_then_delete: bool,
+
     // Enable upgraded multisig support
     #[serde(skip_serializing_if = "is_false")]
     upgraded_multisig_supported: bool,
     // If true minimum txn charge is a multiplier of the gas price
     #[serde(skip_serializing_if = "is_false")]
     txn_base_cost_as_multiplier: bool,
+
+    #[serde(skip_serializing_if = "is_false")]
+    shared_object_deletion: bool,
 
     // If true, then the new algorithm for the leader election schedule will be used
     #[serde(skip_serializing_if = "is_false")]
@@ -821,6 +826,10 @@ impl ProtocolConfig {
         self.feature_flags.txn_base_cost_as_multiplier
     }
 
+    pub fn shared_object_deletion(&self) -> bool {
+        self.feature_flags.shared_object_deletion
+    }
+
     pub fn narwhal_new_leader_election_schedule(&self) -> bool {
         self.feature_flags.narwhal_new_leader_election_schedule
     }
@@ -1374,9 +1383,15 @@ impl ProtocolConfig {
     pub fn set_max_tx_gas_for_testing(&mut self, max_tx_gas: u64) {
         self.max_tx_gas = Some(max_tx_gas)
     }
+
     pub fn set_execution_version_for_testing(&mut self, version: u64) {
         self.execution_version = Some(version)
     }
+
+    pub fn set_shared_object_deletion_for_testing(&mut self) {
+        self.feature_flags.shared_object_deletion = true
+    }
+
     pub fn set_upgraded_multisig_for_testing(&mut self, val: bool) {
         self.feature_flags.upgraded_multisig_supported = val
     }
