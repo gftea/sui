@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::{fs, io};
 use sui_simulator::fastcrypto::hash::{HashFunction, Sha3_256};
 use sui_types::messages_checkpoint::{CertifiedCheckpointSummary, VerifiedCheckpoint};
@@ -146,7 +147,7 @@ pub fn make_iterator<T: DeserializeOwned, R: Read + 'static>(
 
 pub fn verify_checkpoint<S>(
     current: &VerifiedCheckpoint,
-    store: S,
+    store: Arc<S>,
     checkpoint: CertifiedCheckpointSummary,
 ) -> Result<VerifiedCheckpoint, CertifiedCheckpointSummary>
 where
@@ -215,7 +216,7 @@ where
     Ok(VerifiedCheckpoint::new_unchecked(checkpoint))
 }
 
-fn hard_link(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
+pub fn hard_link(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
     fs::create_dir_all(&dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
