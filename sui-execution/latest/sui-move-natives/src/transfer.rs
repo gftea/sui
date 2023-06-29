@@ -19,7 +19,7 @@ use sui_types::{base_types::SequenceNumber, object::Owner};
 
 const E_SHARED_NON_NEW_OBJECT: u64 = 0;
 
-const E_SHARED_OBJECT_OPERATION_NOT_SUPPORTED: u64 = 1;
+pub const E_SHARED_OBJECT_OPERATION_NOT_SUPPORTED: u64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct TransferInternalCostParams {
@@ -162,18 +162,17 @@ pub fn share_object(
     })
 }
 
-fn object_is_shared(context: &mut NativeContext, obj: &Value) -> PartialVMResult<bool> {
+pub fn object_is_shared(context: &mut NativeContext, obj: &Value) -> PartialVMResult<bool> {
     let obj_runtime: &mut ObjectRuntime = context.extensions_mut().get_mut();
     let id: ObjectID = get_object_id(obj.copy_value()?)?
         .value_as::<AccountAddress>()?
         .into();
 
-    if let Some(owner) = obj_runtime.state.input_objects.get(&id) {
-        if owner.is_shared() {
-            return Ok(true);
-        }
-    };
-    Ok(false)
+    Ok(obj_runtime
+        .state
+        .input_objects
+        .get(&id)
+        .is_some_and(|owner| owner.is_shared()))
 }
 
 fn object_runtime_transfer(

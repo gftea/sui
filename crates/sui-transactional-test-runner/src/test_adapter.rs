@@ -275,7 +275,7 @@ impl<'a> MoveTestAdapter<'a> for SuiTestAdapter<'a> {
                 ),
             };
 
-        protocol_config.set_shared_object_deletion();
+        protocol_config.set_shared_object_deletion_for_testing();
         let mut named_address_mapping = NAMED_ADDRESSES.clone();
 
         let mut objects = genesis_module_objects_for_protocol_version(protocol_config.version);
@@ -1174,10 +1174,7 @@ impl<'a> SuiTestAdapter<'a> {
             }
             ExecutionStatus::Failure { error, command } => {
                 let execution_msg = if with_shared {
-                    format!(
-                        "Cannot return execution error with shared objects. \
-                        Debug of error: {error:?} at command {command:?}"
-                    )
+                    format!("Debug of error: {error:?} at command {command:?}")
                 } else {
                     format!("Execution Error: {}", error_opt.unwrap())
                 };

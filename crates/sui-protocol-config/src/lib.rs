@@ -3,7 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sui_protocol_config_macros::{ProtocolConfigFeatureFlagsGetters, ProtocolConfigGetters};
@@ -237,7 +236,6 @@ struct FeatureFlags {
     // regardless of their previous state in the store.
     #[serde(skip_serializing_if = "is_false")]
     simplified_unwrap_then_delete: bool,
-
     // Enable upgraded multisig support
     #[serde(skip_serializing_if = "is_false")]
     upgraded_multisig_supported: bool,

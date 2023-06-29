@@ -182,10 +182,14 @@ pub enum ExecutionFailureStatus {
         Please run the Sui Move Verifier for more information."
     )]
     SuiMoveVerificationTimedout,
+
+    #[error(
+        "Shared object operations such a wrapping, freezing, or converting to owned are not \
+    allowed."
+    )]
+    SharedObjectOperationNotAllowed,
     // NOTE: if you want to add a new enum,
     // please add it at the end for Rust SDK backward compatibility.
-    #[error("Shared objects cannot be wrapped.")]
-    SharedObjectOperationNotAllowed,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Hash)]
@@ -240,6 +244,11 @@ pub enum CommandArgumentError {
     InvalidObjectByValue,
     #[error("Immutable objects cannot be passed by mutable reference, &mut.")]
     InvalidObjectByMutRef,
+    #[error(
+        "Shared object operations such a wrapping, freezing, or converting to owned are not \
+    allowed."
+    )]
+    SharedObjectOperationNotAllowed,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Hash, Error)]
