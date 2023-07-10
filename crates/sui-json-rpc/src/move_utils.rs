@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::api::MoveUtilsServer;
+use crate::authority_state::State;
 use crate::error::{Error, SuiRpcInputError};
 use crate::read_api::{get_move_module, get_move_modules_by_package};
 use crate::{with_tracing, SuiRpcModule};
@@ -31,7 +32,7 @@ use tracing::instrument;
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait MoveUtilsInternalTrait {
-    fn get_state(&self) -> &AuthorityState;
+    fn get_state(&self) -> &dyn State;
 
     async fn get_move_module(
         &self,
@@ -48,7 +49,7 @@ pub trait MoveUtilsInternalTrait {
 }
 
 pub struct MoveUtilsInternal {
-    state: Arc<AuthorityState>,
+    state: Arc<dyn State>,
 }
 
 impl MoveUtilsInternal {
@@ -59,8 +60,8 @@ impl MoveUtilsInternal {
 
 #[async_trait]
 impl MoveUtilsInternalTrait for MoveUtilsInternal {
-    fn get_state(&self) -> &AuthorityState {
-        &self.state
+    fn get_state(&self) -> &dyn State {
+        Arc::as_ref(&self.state)
     }
 
     async fn get_move_module(
@@ -79,9 +80,7 @@ impl MoveUtilsInternalTrait for MoveUtilsInternal {
     }
 
     fn get_object_read(&self, package: ObjectID) -> Result<ObjectRead, Error> {
-        self.get_state()
-            .get_object_read(&package)
-            .map_err(Error::from)
+        self.state.get_object_read(&package).map_err(Error::from)
     }
 }
 

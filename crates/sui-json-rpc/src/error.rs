@@ -11,6 +11,8 @@ use sui_types::quorum_driver_types::{QuorumDriverError, NON_RECOVERABLE_ERROR_MS
 use thiserror::Error;
 use tokio::task::JoinError;
 
+use crate::authority_state::StateReadError;
+
 pub type RpcInterimResult<T = ()> = Result<T, Error>;
 
 #[derive(Debug, Error)]
@@ -23,7 +25,6 @@ pub enum Error {
 
     #[error("Deserialization error: {0}")]
     BcsError(#[from] bcs::Error),
-
     #[error("Unexpected error: {0}")]
     UnexpectedError(String),
 
@@ -53,6 +54,10 @@ pub enum Error {
 
     #[error(transparent)]
     SuiRpcInputError(#[from] SuiRpcInputError),
+
+    // TODO(wlmyng): convert StateReadError::Internal message to generic internal error message.
+    #[error(transparent)]
+    StateReadError(#[from] StateReadError),
 }
 
 impl From<Error> for RpcError {
@@ -84,6 +89,7 @@ impl Error {
                 }
                 _ => RpcError::Call(CallError::Failed(err.into())),
             },
+            Error::StateReadError(e) => e.into(),
             _ => RpcError::Call(CallError::Failed(self.into())),
         }
     }

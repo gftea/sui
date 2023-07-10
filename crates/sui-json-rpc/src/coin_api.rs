@@ -11,26 +11,24 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::RpcModule;
 use move_core_types::language_storage::{StructTag, TypeTag};
 use sui_storage::indexes::TotalBalance;
-use sui_types::digests::TransactionDigest;
-use sui_types::transaction::VerifiedTransaction;
 use tap::TapFallible;
 use tracing::{debug, info, instrument};
 
 use mysten_metrics::spawn_monitored_task;
 use sui_core::authority::AuthorityState;
-use sui_json_rpc_types::{Balance, Coin as SuiCoin};
+use sui_json_rpc_types::Balance;
 use sui_json_rpc_types::{CoinPage, SuiCoinMetadata};
 use sui_open_rpc::Module;
 use sui_types::balance::Supply;
 use sui_types::base_types::{ObjectID, SuiAddress};
 use sui_types::coin::{CoinMetadata, TreasuryCap};
-use sui_types::effects::{TransactionEffects, TransactionEffectsAPI};
-use sui_types::error::{SuiError, SuiResult};
+use sui_types::effects::TransactionEffectsAPI;
 use sui_types::gas_coin::GAS;
-use sui_types::object::{Object, ObjectRead};
+use sui_types::object::Object;
 use sui_types::parse_sui_struct_tag;
 
 use crate::api::{cap_page_limit, CoinReadApiServer, JsonRpcMetrics};
+use crate::authority_state::State;
 use crate::error::{Error, RpcInterimResult, SuiRpcInputError};
 use crate::{with_tracing, SuiRpcModule};
 
@@ -235,93 +233,6 @@ impl CoinReadApiServer for CoinReadApi {
     }
 }
 
-/// State trait to capture subset of AuthorityState used by CoinReadApi
-/// This allows us to also mock AuthorityState for testing
-#[cfg_attr(test, automock)]
-#[async_trait]
-pub trait State {
-    fn get_object_read(&self, object_id: &ObjectID) -> SuiResult<ObjectRead>;
-    async fn get_object(&self, object_id: &ObjectID) -> SuiResult<Option<Object>>;
-    fn find_publish_txn_digest(&self, package_id: ObjectID) -> SuiResult<TransactionDigest>;
-    fn get_owned_coins(
-        &self,
-        owner: SuiAddress,
-        cursor: (String, ObjectID),
-        limit: usize,
-        one_coin_type_only: bool,
-    ) -> SuiResult<Vec<SuiCoin>>;
-    async fn get_executed_transaction_and_effects(
-        &self,
-        digest: TransactionDigest,
-    ) -> SuiResult<(VerifiedTransaction, TransactionEffects)>;
-    async fn get_balance(&self, owner: SuiAddress, coin_type: TypeTag) -> SuiResult<TotalBalance>;
-    async fn get_all_balance(
-        &self,
-        owner: SuiAddress,
-    ) -> SuiResult<Arc<HashMap<TypeTag, TotalBalance>>>;
-}
-
-#[async_trait]
-impl State for AuthorityState {
-    fn get_object_read(&self, object_id: &ObjectID) -> SuiResult<ObjectRead> {
-        self.get_object_read(object_id)
-    }
-
-    async fn get_object(&self, object_id: &ObjectID) -> SuiResult<Option<Object>> {
-        self.get_object(object_id).await
-    }
-
-    fn find_publish_txn_digest(&self, package_id: ObjectID) -> SuiResult<TransactionDigest> {
-        self.find_publish_txn_digest(package_id)
-    }
-
-    fn get_owned_coins(
-        &self,
-        owner: SuiAddress,
-        cursor: (String, ObjectID),
-        limit: usize,
-        one_coin_type_only: bool,
-    ) -> SuiResult<Vec<SuiCoin>> {
-        Ok(self
-            .get_owned_coins_iterator_with_cursor(owner, cursor, limit, one_coin_type_only)?
-            .map(|(coin_type, coin_object_id, coin)| SuiCoin {
-                coin_type,
-                coin_object_id,
-                version: coin.version,
-                digest: coin.digest,
-                balance: coin.balance,
-                previous_transaction: coin.previous_transaction,
-            })
-            .collect::<Vec<_>>())
-    }
-
-    async fn get_executed_transaction_and_effects(
-        &self,
-        digest: TransactionDigest,
-    ) -> SuiResult<(VerifiedTransaction, TransactionEffects)> {
-        self.get_executed_transaction_and_effects(digest).await
-    }
-
-    async fn get_balance(&self, owner: SuiAddress, coin_type: TypeTag) -> SuiResult<TotalBalance> {
-        self.indexes
-            .as_ref()
-            .ok_or(SuiError::IndexStoreNotAvailable)?
-            .get_balance(owner, coin_type)
-            .await
-    }
-
-    async fn get_all_balance(
-        &self,
-        owner: SuiAddress,
-    ) -> SuiResult<Arc<HashMap<TypeTag, TotalBalance>>> {
-        self.indexes
-            .as_ref()
-            .ok_or(SuiError::IndexStoreNotAvailable)?
-            .get_all_balance(owner)
-            .await
-    }
-}
-
 #[cached(
     type = "SizedCache<String, ObjectID>",
     create = "{ SizedCache::with_size(10000) }",
@@ -468,6 +379,7 @@ impl CoinReadInternal for CoinReadInternalImpl {
 
 #[cfg(test)]
 mod tests {
+    use crate::authority_state::{MockState, StateReadError};
     use expect_test::expect;
     use jsonrpsee::types::ErrorObjectOwned;
     use mockall::predicate;
@@ -477,6 +389,7 @@ mod tests {
     use sui_types::base_types::{ObjectID, SequenceNumber, SuiAddress};
     use sui_types::coin::TreasuryCap;
     use sui_types::digests::{ObjectDigest, TransactionDigest};
+    use sui_types::error::SuiError;
     use sui_types::gas_coin::GAS;
     use sui_types::id::UID;
     use sui_types::object::Object;
@@ -785,37 +698,10 @@ mod tests {
             let mut mock_state = MockState::new();
             mock_state
                 .expect_get_owned_coins()
-                .returning(move |_, _, _, _| Err(SuiError::IndexStoreNotAvailable));
-            let internal = CoinReadInternalImpl {
-                state: Arc::new(mock_state),
-                metrics: Arc::new(JsonRpcMetrics::new_for_tests()),
-            };
-            let coin_read_api = CoinReadApi {
-                internal: Box::new(internal),
-            };
-
-            let response = coin_read_api
-                .get_coins(owner, Some(coin_type.to_string()), None, None)
-                .await;
-
-            assert!(response.is_err());
-            let error_result = response.unwrap_err();
-            let error_object: ErrorObjectOwned = error_result.into();
-            let expected = expect!["-32000"];
-            expected.assert_eq(&error_object.code().to_string());
-            let expected = expect!["Index store not available on this Fullnode."];
-            expected.assert_eq(error_object.message());
-        }
-
-        #[tokio::test]
-        async fn test_get_coins_iterator_typed_store_error() {
-            let owner = get_test_owner();
-            let coin_type = get_test_coin_type(get_test_package_id());
-            let mut mock_state = MockState::new();
-            mock_state
-                .expect_get_owned_coins()
                 .returning(move |_, _, _, _| {
-                    Err(TypedStoreError::RocksDBError("mock rocksdb error".to_string()).into())
+                    Err(StateReadError::Client(
+                        SuiError::IndexStoreNotAvailable.into(),
+                    ))
                 });
             let internal = CoinReadInternalImpl {
                 state: Arc::new(mock_state),
@@ -832,7 +718,43 @@ mod tests {
             assert!(response.is_err());
             let error_result = response.unwrap_err();
             let error_object: ErrorObjectOwned = error_result.into();
-            let expected = expect!["-32000"];
+            let expected = expect!["-32602"];
+            expected.assert_eq(&error_object.code().to_string());
+            let expected = expect!["Index store not available on this Fullnode."];
+            expected.assert_eq(error_object.message());
+        }
+
+        #[tokio::test]
+        async fn test_get_coins_iterator_typed_store_error() {
+            let owner = get_test_owner();
+            let coin_type = get_test_coin_type(get_test_package_id());
+            let mut mock_state = MockState::new();
+            mock_state
+                .expect_get_owned_coins()
+                .returning(move |_, _, _, _| {
+                    Err(StateReadError::Internal(
+                        SuiError::StorageError(TypedStoreError::RocksDBError(
+                            "mock rocksdb error".to_string(),
+                        ))
+                        .into(),
+                    ))
+                });
+            let internal = CoinReadInternalImpl {
+                state: Arc::new(mock_state),
+                metrics: Arc::new(JsonRpcMetrics::new_for_tests()),
+            };
+            let coin_read_api = CoinReadApi {
+                internal: Box::new(internal),
+            };
+
+            let response = coin_read_api
+                .get_coins(owner, Some(coin_type.to_string()), None, None)
+                .await;
+
+            assert!(response.is_err());
+            let error_result = response.unwrap_err();
+            let error_object: ErrorObjectOwned = error_result.into();
+            let expected = expect!["-32603"];
             expected.assert_eq(&error_object.code().to_string());
             let expected = expect!["Storage error"];
             expected.assert_eq(error_object.message());
@@ -1111,9 +1033,11 @@ mod tests {
             let owner = get_test_owner();
             let coin_type = get_test_coin_type(get_test_package_id());
             let mut mock_state = MockState::new();
-            mock_state
-                .expect_get_balance()
-                .returning(move |_, _| Err(SuiError::IndexStoreNotAvailable));
+            mock_state.expect_get_balance().returning(move |_, _| {
+                Err(StateReadError::Client(
+                    SuiError::IndexStoreNotAvailable.into(),
+                ))
+            });
             let internal = CoinReadInternalImpl {
                 state: Arc::new(mock_state),
                 metrics: Arc::new(JsonRpcMetrics::new_for_tests()),
@@ -1129,7 +1053,7 @@ mod tests {
             assert!(response.is_err());
             let error_result = response.unwrap_err();
             let error_object: ErrorObjectOwned = error_result.into();
-            let expected = expect!["-32000"];
+            let expected = expect!["-32602"];
             expected.assert_eq(&error_object.code().to_string());
             let expected = expect!["Index store not available on this Fullnode."];
             expected.assert_eq(error_object.message());
@@ -1141,9 +1065,11 @@ mod tests {
             let owner = get_test_owner();
             let coin_type = get_test_coin_type(get_test_package_id());
             let mut mock_state = MockState::new();
-            mock_state
-                .expect_get_balance()
-                .returning(move |_, _| Err(SuiError::ExecutionError("mock db error".to_string())));
+            mock_state.expect_get_balance().returning(move |_, _| {
+                Err(StateReadError::Internal(
+                    SuiError::ExecutionError("mock db error".to_string()).into(),
+                ))
+            });
             let internal = CoinReadInternalImpl {
                 state: Arc::new(mock_state),
                 metrics: Arc::new(JsonRpcMetrics::new_for_tests()),
@@ -1160,7 +1086,7 @@ mod tests {
             let error_result = response.unwrap_err();
             let error_object: ErrorObjectOwned = error_result.into();
 
-            let expected = expect!["-32000"];
+            let expected = expect!["-32603"];
             expected.assert_eq(&error_object.code().to_string());
             let expected = expect!["Error executing mock db error"];
             expected.assert_eq(error_object.message());
@@ -1243,9 +1169,11 @@ mod tests {
         async fn test_index_store_not_available() {
             let owner = get_test_owner();
             let mut mock_state = MockState::new();
-            mock_state
-                .expect_get_all_balance()
-                .returning(move |_| Err(SuiError::IndexStoreNotAvailable));
+            mock_state.expect_get_all_balance().returning(move |_| {
+                Err(StateReadError::Client(
+                    SuiError::IndexStoreNotAvailable.into(),
+                ))
+            });
             let internal = CoinReadInternalImpl {
                 state: Arc::new(mock_state),
                 metrics: Arc::new(JsonRpcMetrics::new_for_tests()),
@@ -1259,7 +1187,7 @@ mod tests {
             assert!(response.is_err());
             let error_result = response.unwrap_err();
             let error_object: ErrorObjectOwned = error_result.into();
-            let expected = expect!["-32000"];
+            let expected = expect!["-32602"];
             expected.assert_eq(&error_object.code().to_string());
             let expected = expect!["Index store not available on this Fullnode."];
             expected.assert_eq(error_object.message());

@@ -49,6 +49,7 @@ use sui_types::transaction::{TransactionData, VerifiedTransaction};
 use crate::api::JsonRpcMetrics;
 use crate::api::{validate_limit, ReadApiServer};
 use crate::api::{QUERY_MAX_RESULT_LIMIT, QUERY_MAX_RESULT_LIMIT_CHECKPOINTS};
+use crate::authority_state::State;
 use crate::error::{Error, RpcInterimResult, SuiRpcInputError};
 use crate::with_tracing;
 use crate::{
@@ -61,7 +62,7 @@ const MAX_DISPLAY_NESTED_LEVEL: usize = 10;
 // Fullnodes.
 #[derive(Clone)]
 pub struct ReadApi {
-    pub state: Arc<AuthorityState>,
+    pub state: Arc<dyn State>,
     pub metrics: Arc<JsonRpcMetrics>,
 }
 
@@ -200,7 +201,6 @@ impl ReadApi {
         // when we can tolerate returning None for old txes.
         let checkpoint_seq_list =
             state
-            .database
             .deprecated_multi_get_transaction_checkpoint(&digests_clone)
             .tap_err(
                 |err| debug!(digests=?digests_clone, "Failed to multi get checkpoint sequence number: {:?}", err))?;
@@ -659,7 +659,7 @@ impl ReadApiServer for ReadApi {
                 // is in the epoch store, and thus we risk breaking the read API for txes
                 // from old epochs. Should be migrated once we have indexer support, or
                 // when we can tolerate returning None for old txes.
-                state.database.deprecated_get_transaction_checkpoint(&digest)
+                state.deprecated_get_transaction_checkpoint(&digest)
                     .map_err(|e| {
                         error!("Failed to retrieve checkpoint sequence for transaction {digest:?} with error: {e:?}");
                         Error::from(e)
@@ -791,7 +791,7 @@ impl ReadApiServer for ReadApi {
                 .map_err(
                     |e| {
                         error!("Failed to get transaction events for event digest {event_digest:?} with error: {e:?}");
-                        Error::SuiError(e)
+                        Error::StateReadError(e)
                     })?
                 .data
                 .into_iter()
@@ -909,7 +909,7 @@ impl ReadApiServer for ReadApi {
                         error!(
                             "Failed to get loaded child objects at {digest:?} with error: {e:?}"
                         );
-                        Error::SuiError(e)
+                        Error::StateReadError(e)
                     })? {
                     Some(v) => v
                         .into_iter()
@@ -931,10 +931,7 @@ impl ReadApiServer for ReadApi {
                 .map(|v| {
                     ProtocolConfig::get_for_version_if_supported(
                         (*v).into(),
-                        self.state
-                            .get_chain_identifier()
-                            .ok_or(anyhow!("Chain identifier not found"))?
-                            .chain(),
+                        self.state.get_chain_identifier()?.chain(),
                     )
                     .ok_or(Error::SuiRpcInputError(
                         SuiRpcInputError::ProtocolVersionUnsupported(
@@ -955,10 +952,7 @@ impl ReadApiServer for ReadApi {
     #[instrument(skip(self))]
     async fn get_chain_identifier(&self) -> RpcResult<String> {
         with_tracing!(async move {
-            let ci = self
-                .state
-                .get_chain_identifier()
-                .ok_or(anyhow!("Chain identifier not found"))?;
+            let ci = self.state.get_chain_identifier()?;
             Ok(ci.to_string())
         })
     }
@@ -1066,7 +1060,7 @@ fn get_move_struct(o: &Object, layout: &Option<MoveStructLayout>) -> Result<Move
 }
 
 pub async fn get_move_module(
-    state: &AuthorityState,
+    state: &dyn State,
     package: ObjectID,
     module_name: String,
 ) -> Result<NormalizedModule, Error> {
@@ -1081,7 +1075,7 @@ pub async fn get_move_module(
 }
 
 pub async fn get_move_modules_by_package(
-    state: &AuthorityState,
+    state: &dyn State,
     package: ObjectID,
 ) -> Result<BTreeMap<String, NormalizedModule>, Error> {
     let object_read = state.get_object_read(&package).tap_err(|_| {
