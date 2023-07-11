@@ -6,7 +6,7 @@ use crate::{
     loader::{Function, Loader, Resolver},
     native_functions::NativeContext,
     paranoid_type_checker::ParanoidTypeChecker,
-    plugin::Plugin,
+    plugin::{Plugin, Severity},
     trace,
 };
 use fail::fail_point;
@@ -100,27 +100,12 @@ impl<'a, 'b> TypeView for TypeWithLoader<'a, 'b> {
 }
 
 pub trait InterpreterInterface {
-    fn get_values_len(&self) -> usize;
-    fn set_location(&self, err: PartialVMError) -> VMError;
-    fn maybe_core_dump(&self, err: VMError, current_frame: &Frame) -> VMError;
-    fn get_internal_state(&self) -> ExecutionState;
+    fn get_stack_len(&self) -> usize;
 }
 
 impl InterpreterInterface for Interpreter {
-    fn get_values_len(&self) -> usize {
-        self.get_values_len()
-    }
-
-    fn set_location(&self, err: PartialVMError) -> VMError {
-        self.set_location(err)
-    }
-
-    fn maybe_core_dump(&self, err: VMError, current_frame: &Frame) -> VMError {
-        self.maybe_core_dump(err, current_frame)
-    }
-
-    fn get_internal_state(&self) -> ExecutionState {
-        self.get_internal_state()
+    fn get_stack_len(&self) -> usize {
+        self.get_stack_len()
     }
 }
 
@@ -130,8 +115,68 @@ impl Interpreter {
         &self.runtime_limits_config
     }
 
+    pub fn handle_plugin_error(
+        &self,
+        err: PartialVMError,
+        function: &Arc<Function>,
+        current_frame: Option<&Frame>,
+        resolver: Option<&Resolver>,
+        severity: Severity,
+    ) -> VMResult<()> {
+        match severity {
+            Severity::Critical => {
+                return self.handle_error_for_function(err, function, current_frame, resolver)
+            }
+            Severity::NonCritical => {
+                error!("Plugin error: {:?}", err);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn handle_error_for_function(
+        &self,
+        err: PartialVMError,
+        function: &Arc<Function>,
+        current_frame: Option<&Frame>,
+        resolver: Option<&Resolver>,
+    ) -> VMResult<()> {
+        if function.is_native() {
+            let e = match resolver {
+                Some(r) if r.loader().vm_config().error_execution_state => {
+                    err.with_exec_state(self.get_internal_state())
+                }
+                _ => err,
+            };
+
+            match function.module_id() {
+                Some(id) => {
+                    return Err(e
+                        .at_code_offset(function.index(), 0)
+                        .finish(Location::Module(id.clone())));
+                }
+                None => {
+                    return Err(
+                        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                            .with_message(
+                                "Unexpected native function not located in a module".to_owned(),
+                            )
+                            .finish(Location::Undefined),
+                    );
+                }
+            }
+        }
+        // For non-native functions
+        // Only handle case where frame is present
+        if let Some(frame) = current_frame {
+            let e = self.set_location(err);
+            return Err(self.maybe_core_dump(e, frame));
+        }
+        Ok(())
+    }
+
     pub fn pre_hook_entrypoint(
-        _interpreter: &mut Interpreter,
+        interpreter: &mut Interpreter,
         plugins: &mut Vec<Box<dyn Plugin>>,
         gas_meter: &mut impl GasMeter,
         function: &Arc<Function>,
@@ -140,9 +185,20 @@ impl Interpreter {
         loader: &Loader,
     ) -> VMResult<()> {
         profile_open_frame!(gas_meter, function.pretty_string());
+        let resolver = function.get_resolver(data_store.link_context(), loader);
 
         for plugin in plugins.iter_mut() {
-            plugin.pre_hook_entrypoint(function, ty_args, data_store.link_context(), loader)?;
+            let result = plugin.pre_hook_entrypoint(function, ty_args, &resolver);
+
+            if let Err(err) = result {
+                interpreter.handle_plugin_error(
+                    err,
+                    function,
+                    None,
+                    None,
+                    plugin.get_severity(),
+                )?;
+            }
         }
 
         Ok(())
@@ -161,15 +217,20 @@ impl Interpreter {
         #[cfg(debug_assertions)]
         profile_open_frame!(gas_meter, function.pretty_string());
 
+        let resolver = function.get_resolver(data_store.link_context(), loader);
         for plugin in plugins.iter_mut() {
-            plugin.pre_hook_fn(
-                interpreter,
-                current_frame,
-                function,
-                ty_args,
-                data_store.link_context(),
-                loader,
-            )?;
+            let result =
+                plugin.pre_hook_fn(interpreter, current_frame, function, ty_args, &resolver);
+
+            if let Err(err) = result {
+                interpreter.handle_plugin_error(
+                    err,
+                    function,
+                    Some(current_frame),
+                    Some(&resolver),
+                    plugin.get_severity(),
+                )?;
+            }
         }
 
         Ok(())
@@ -1033,8 +1094,8 @@ impl Interpreter {
         ExecutionState::new(stack_trace)
     }
 
-    pub fn get_values_len(&self) -> usize {
-        self.operand_stack.get_values_len()
+    pub fn get_stack_len(&self) -> usize {
+        self.operand_stack.get_stack_len()
     }
 }
 
@@ -1099,7 +1160,7 @@ impl Stack {
         Ok(self.value[(self.value.len() - n)..].iter())
     }
 
-    fn get_values_len(&self) -> usize {
+    fn get_stack_len(&self) -> usize {
         self.value.len()
     }
 }

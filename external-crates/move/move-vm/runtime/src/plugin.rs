@@ -3,26 +3,29 @@
 
 use std::sync::Arc;
 
-use move_binary_format::{
-    errors::{PartialVMResult, VMResult},
-    file_format::Bytecode,
-};
-use move_core_types::account_address::AccountAddress;
+use move_binary_format::{errors::PartialVMResult, file_format::Bytecode};
 use move_vm_types::{loaded_data::runtime_types::Type, values::Locals};
 
 use crate::{
     interpreter::{FrameInterface, InstrRet, InterpreterInterface},
-    loader::{Function, Loader, Resolver},
+    loader::{Function, Resolver},
 };
 
+#[derive(Clone, Copy)]
+pub enum Severity {
+    Critical,
+    NonCritical,
+}
+
 pub(crate) trait Plugin {
+    fn get_severity(&self) -> Severity;
+
     fn pre_hook_entrypoint(
         &mut self,
         function: &Arc<Function>,
         ty_args: &[Type],
-        link_context: AccountAddress,
-        loader: &Loader,
-    ) -> VMResult<()>;
+        resolver: &Resolver,
+    ) -> PartialVMResult<()>;
 
     fn pre_hook_fn(
         &mut self,
@@ -30,9 +33,8 @@ pub(crate) trait Plugin {
         current_frame: &dyn FrameInterface,
         function: &Arc<Function>,
         ty_args: &[Type],
-        link_context: AccountAddress,
-        loader: &Loader,
-    ) -> VMResult<()>;
+        resolver: &Resolver,
+    ) -> PartialVMResult<()>;
 
     fn post_hook_fn(
         &mut self,
