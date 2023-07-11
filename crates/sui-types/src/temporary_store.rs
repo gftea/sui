@@ -677,10 +677,12 @@ impl<'backing> TemporaryStore<'backing> {
                         panic!("Mutated object must exist in the store: ID = {:?}", id)
                     });
                     match &old_obj.owner {
-                        Owner::ObjectOwner(_parent) => {
+                        // ObjectOwner = dynamic field mutations
+                        // AddressOwner = received object
+                        Owner::ObjectOwner(_) | Owner::AddressOwner(_) => {
                             objs_to_authenticate.push(*id);
                         }
-                        Owner::AddressOwner(_) | Owner::Shared { .. } => {
+                        Owner::Shared { .. } => {
                             unreachable!("Should already be in authenticated_objs")
                         }
                         Owner::Immutable => {
@@ -710,10 +712,10 @@ impl<'backing> TemporaryStore<'backing> {
                     // get owner at beginning of tx
                     let old_obj = self.store.get_object(id)?.unwrap();
                     match &old_obj.owner {
-                        Owner::ObjectOwner(_) => {
+                        Owner::AddressOwner(_) | Owner::ObjectOwner(_) => {
                             objs_to_authenticate.push(*id);
                         }
-                        Owner::AddressOwner(_) | Owner::Shared { .. } => {
+                        Owner::Shared { .. } => {
                             unreachable!("Should already be in authenticated_objs")
                         }
                         Owner::Immutable => unreachable!("Immutable objects cannot be deleted"),
@@ -748,7 +750,7 @@ impl<'backing> TemporaryStore<'backing> {
                 continue;
             };
             let parent = match &old_obj.owner {
-                Owner::ObjectOwner(parent) => ObjectID::from(*parent),
+                Owner::ObjectOwner(parent) | Owner::AddressOwner(parent) => ObjectID::from(*parent),
                 owner => panic!(
                     "Unauthenticated root at {to_authenticate:?} with owner {owner:?}\n\
              Potentially covering objects in: {covered:#?}",
@@ -1123,6 +1125,25 @@ impl<'backing> ChildObjectResolver for TemporaryStore<'backing> {
             self.store
                 .read_child_object(parent, child, child_version_upper_bound)
         }
+    }
+
+    fn receive_object_at_version(
+        &self,
+        owner: &ObjectID,
+        receiving_object_id: &ObjectID,
+        receive_object_at_version: SequenceNumber,
+        epoch_id: EpochId,
+    ) -> SuiResult<Option<Object>> {
+        // You should never be able to try and receive an object after deleting it or writing it in the same
+        // transaction since `Receiving` doesn't have copy.
+        debug_assert!(self.deleted.get(receiving_object_id).is_none());
+        debug_assert!(self.written.get(receiving_object_id).is_none());
+        self.store.receive_object_at_version(
+            owner,
+            receiving_object_id,
+            receive_object_at_version,
+            epoch_id,
+        )
     }
 }
 

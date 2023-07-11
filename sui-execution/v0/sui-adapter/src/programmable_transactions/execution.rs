@@ -1374,6 +1374,9 @@ mod checked {
                 ty
             }
             Value::Object(obj) => &obj.type_,
+            Value::Receiving(_, _) => {
+                unreachable!("Receiving value should never occur in v0 execution")
+            }
         };
         if ty != param_ty {
             Err(command_argument_error(

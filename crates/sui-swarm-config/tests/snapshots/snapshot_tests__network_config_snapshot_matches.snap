@@ -77,6 +77,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:
@@ -159,6 +160,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:
@@ -241,6 +243,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:
@@ -323,6 +326,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:
@@ -405,6 +409,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:
@@ -487,6 +492,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:
@@ -569,6 +575,7 @@ validator_configs:
       package_upgrade_disabled: false
       shared_object_disabled: false
       user_transaction_disabled: false
+      receiving_objects_disabled: false
     certificate-deny-config: {}
     state-debug-dump-config: {}
     state-archive-write-config:

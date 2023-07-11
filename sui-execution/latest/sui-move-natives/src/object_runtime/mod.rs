@@ -22,6 +22,7 @@ use std::{
 use sui_protocol_config::{check_limit_by_meter, LimitThresholdCrossed, ProtocolConfig};
 use sui_types::{
     base_types::{MoveObjectType, ObjectID, SequenceNumber, SuiAddress},
+    committee::EpochId,
     error::{ExecutionError, ExecutionErrorKind, VMMemoryLimitExceededSubStatusCode},
     id::UID,
     metrics::LimitsMetrics,
@@ -82,6 +83,7 @@ pub(crate) struct ObjectRuntimeState {
     events: Vec<(Type, StructTag, Value)>,
     // total size of events emitted so far
     total_events_size: u64,
+    received: Set<ObjectID>,
 }
 
 #[derive(Clone)]
@@ -167,6 +169,7 @@ impl<'a> ObjectRuntime<'a> {
         is_metered: bool,
         protocol_config: &ProtocolConfig,
         metrics: Arc<LimitsMetrics>,
+        epoch_id: EpochId,
     ) -> Self {
         let mut input_object_owners = BTreeMap::new();
         let mut root_version = BTreeMap::new();
@@ -189,6 +192,7 @@ impl<'a> ObjectRuntime<'a> {
                 is_metered,
                 LocalProtocolConfig::new(protocol_config),
                 metrics.clone(),
+                epoch_id,
             ),
             test_inventories: TestInventories::new(),
             state: ObjectRuntimeState {
@@ -198,6 +202,7 @@ impl<'a> ObjectRuntime<'a> {
                 transfers: LinkedHashMap::new(),
                 events: vec![],
                 total_events_size: 0,
+                received: Set::new(),
             },
             is_metered,
             constants: LocalProtocolConfig::new(protocol_config),
@@ -339,6 +344,28 @@ impl<'a> ObjectRuntime<'a> {
     ) -> PartialVMResult<bool> {
         self.object_store
             .object_exists_and_has_type(parent, child, child_type)
+    }
+
+    pub(super) fn receive_object(
+        &mut self,
+        parent: ObjectID,
+        child: ObjectID,
+        child_version: SequenceNumber,
+        child_ty: &Type,
+        child_layout: &MoveTypeLayout,
+        child_fully_annotated_layout: &MoveTypeLayout,
+        child_move_type: MoveObjectType,
+    ) -> PartialVMResult<Option<ObjectResult<Value>>> {
+        self.state.received.insert(child, ());
+        self.object_store.receive_object(
+            parent,
+            child,
+            child_version,
+            child_ty,
+            child_layout,
+            child_fully_annotated_layout,
+            child_move_type,
+        )
     }
 
     pub(crate) fn get_or_fetch_child_object(
@@ -485,6 +512,7 @@ impl ObjectRuntimeState {
             transfers,
             events: user_events,
             total_events_size: _,
+            received,
         } = self;
         let input_owner_map = input_objects
             .iter()
@@ -504,17 +532,19 @@ impl ObjectRuntimeState {
         let writes: LinkedHashMap<_, _> = transfers
             .into_iter()
             .map(|(id, (owner, type_, value))| {
-                let write_kind =
-                    if input_objects.contains_key(&id) || loaded_child_objects.contains_key(&id) {
-                        debug_assert!(!new_ids.contains_key(&id));
-                        WriteKind::Mutate
-                    } else if id == SUI_SYSTEM_STATE_OBJECT_ID || new_ids.contains_key(&id) {
-                        // SUI_SYSTEM_STATE_OBJECT_ID is only transferred during genesis
-                        // TODO find a way to insert this in the new_ids during genesis transactions
-                        WriteKind::Create
-                    } else {
-                        WriteKind::Unwrap
-                    };
+                let write_kind = if input_objects.contains_key(&id)
+                    || loaded_child_objects.contains_key(&id)
+                    || received.contains_key(&id)
+                {
+                    debug_assert!(!new_ids.contains_key(&id));
+                    WriteKind::Mutate
+                } else if id == SUI_SYSTEM_STATE_OBJECT_ID || new_ids.contains_key(&id) {
+                    // SUI_SYSTEM_STATE_OBJECT_ID is only transferred during genesis
+                    // TODO find a way to insert this in the new_ids during genesis transactions
+                    WriteKind::Create
+                } else {
+                    WriteKind::Unwrap
+                };
                 (id, (write_kind, owner, type_, value))
             })
             .collect();
@@ -523,18 +553,21 @@ impl ObjectRuntimeState {
             .into_iter()
             .map(|(id, ())| {
                 debug_assert!(!new_ids.contains_key(&id));
-                let delete_kind =
-                    if input_objects.contains_key(&id) || loaded_child_objects.contains_key(&id) {
-                        DeleteKind::Normal
-                    } else {
-                        DeleteKind::UnwrapThenDelete
-                    };
+                let delete_kind = if input_objects.contains_key(&id)
+                    || loaded_child_objects.contains_key(&id)
+                    || received.contains_key(&id)
+                {
+                    DeleteKind::Normal
+                } else {
+                    DeleteKind::UnwrapThenDelete
+                };
                 (id, delete_kind)
             })
             .collect();
         // remaining by value objects must be wrapped
         let remaining_by_value_objects = by_value_inputs
             .into_iter()
+            .chain(received.keys().copied())
             .filter(|id| {
                 !writes.contains_key(id)
                     && !deletions.contains_key(id)
