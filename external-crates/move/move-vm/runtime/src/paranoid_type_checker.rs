@@ -71,7 +71,7 @@ impl Plugin for ParanoidTypeChecker {
         true
     }
 
-    fn pre_hook_entrypoint(
+    fn pre_entrypoint(
         &mut self,
         function: &Arc<Function>,
         ty_args: &[Type],
@@ -95,7 +95,11 @@ impl Plugin for ParanoidTypeChecker {
         Ok(())
     }
 
-    fn pre_hook_fn(
+    fn post_entrypoint(&mut self) -> VMResult<()> {
+        Ok(())
+    }
+
+    fn pre_fn(
         &mut self,
         interpreter: &dyn InterpreterInterface,
         current_frame: &dyn FrameInterface,
@@ -134,9 +138,11 @@ impl Plugin for ParanoidTypeChecker {
         Ok(())
     }
 
-    fn post_hook_fn(&mut self, _function: &Arc<Function>) -> () {}
+    fn post_fn(&mut self, _function: &Arc<Function>) -> VMResult<()> {
+        Ok(())
+    }
 
-    fn pre_hook_instr(
+    fn pre_instr(
         &mut self,
         interpreter: &dyn InterpreterInterface,
         function: &Arc<Function>,
@@ -158,7 +164,7 @@ impl Plugin for ParanoidTypeChecker {
         Ok(())
     }
 
-    fn post_hook_instr(
+    fn post_instr(
         &mut self,
         interpreter: &dyn InterpreterInterface,
         function: &Arc<Function>,

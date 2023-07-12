@@ -17,14 +17,16 @@ use crate::{
 pub(crate) trait Plugin {
     fn is_critical(&self) -> bool;
 
-    fn pre_hook_entrypoint(
+    fn pre_entrypoint(
         &mut self,
         function: &Arc<Function>,
         ty_args: &[Type],
         resolver: &Resolver,
     ) -> VMResult<()>;
 
-    fn pre_hook_fn(
+    fn post_entrypoint(&mut self) -> VMResult<()>;
+
+    fn pre_fn(
         &mut self,
         interpreter: &dyn InterpreterInterface,
         current_frame: &dyn FrameInterface,
@@ -33,13 +35,13 @@ pub(crate) trait Plugin {
         resolver: &Resolver,
     ) -> VMResult<()>;
 
-    fn post_hook_fn(
+    fn post_fn(
         &mut self,
         // gas_meter: &mut impl GasMeter, TODO(wlmyng): GasMeter has a bunch of generic types that are incompatible with trait objects
         function: &Arc<Function>,
-    ) -> ();
+    ) -> VMResult<()>;
 
-    fn pre_hook_instr(
+    fn pre_instr(
         &mut self,
         interpreter: &dyn InterpreterInterface,
         // gas_meter: &mut impl GasMeter,
@@ -50,7 +52,7 @@ pub(crate) trait Plugin {
         resolver: &Resolver,
     ) -> PartialVMResult<()>;
 
-    fn post_hook_instr(
+    fn post_instr(
         &mut self,
         interpreter: &dyn InterpreterInterface,
         // gas_meter: &mut impl GasMeter,

@@ -129,65 +129,21 @@ impl Interpreter {
         &self.runtime_limits_config
     }
 
-    pub fn handle_plugin_error(
-        &self,
-        err: PartialVMError,
-        function: &Arc<Function>,
-        current_frame: Option<&Frame>,
-        resolver: Option<&Resolver>,
-        is_critical: bool,
-    ) -> VMResult<()> {
-        if is_critical {
-            return self.handle_error_for_function(err, function, current_frame, resolver);
-        } else {
-            error!("Plugin error: {:?}", err);
-        }
-        Ok(())
-    }
-
-    pub fn handle_error_for_function(
-        &self,
-        err: PartialVMError,
-        function: &Arc<Function>,
-        current_frame: Option<&Frame>,
-        resolver: Option<&Resolver>,
-    ) -> VMResult<()> {
-        if function.is_native() {
-            let e = match resolver {
-                Some(r) if r.loader().vm_config().error_execution_state => {
-                    err.with_exec_state(self.get_internal_state())
+    pub fn handle_plugin_error(result: VMResult<()>, is_critical: bool) -> VMResult<()> {
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if is_critical {
+                    return Err(err);
+                } else {
+                    error!("Plugin error: {:?}", err);
                 }
-                _ => err,
-            };
-
-            match function.module_id() {
-                Some(id) => {
-                    return Err(e
-                        .at_code_offset(function.index(), 0)
-                        .finish(Location::Module(id.clone())));
-                }
-                None => {
-                    return Err(
-                        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
-                            .with_message(
-                                "Unexpected native function not located in a module".to_owned(),
-                            )
-                            .finish(Location::Undefined),
-                    );
-                }
+                Ok(())
             }
         }
-        // For non-native functions
-        // Only handle case where frame is present
-        if let Some(frame) = current_frame {
-            let e = self.set_location(err);
-            return Err(self.maybe_core_dump(e, frame));
-        }
-        Ok(())
     }
 
-    pub fn pre_hook_entrypoint(
-        interpreter: &mut Interpreter,
+    pub fn pre_entrypoint(
         plugins: &mut Vec<Box<dyn Plugin>>,
         gas_meter: &mut impl GasMeter,
         function: &Arc<Function>,
@@ -199,24 +155,23 @@ impl Interpreter {
         let resolver = function.get_resolver(data_store.link_context(), loader);
 
         for plugin in plugins.iter_mut() {
-            plugin.pre_hook_entrypoint(function, ty_args, &resolver)?;
-            // let result = plugin.pre_hook_entrypoint(function, ty_args, &resolver);
-
-            // if let Err(err) = result {
-            //     interpreter.handle_plugin_error(
-            //         err,
-            //         function,
-            //         None,
-            //         None,
-            //         plugin.is_critical(),
-            //     )?;
-            // }
+            let result = plugin.pre_entrypoint(function, ty_args, &resolver);
+            Self::handle_plugin_error(result, plugin.is_critical())?;
         }
 
         Ok(())
     }
 
-    pub fn pre_hook_fn(
+    pub fn post_entrypoint(plugins: &mut Vec<Box<dyn Plugin>>) -> VMResult<()> {
+        for plugin in plugins.iter_mut() {
+            let result = plugin.post_entrypoint();
+            Self::handle_plugin_error(result, plugin.is_critical())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn pre_fn(
         interpreter: &mut Interpreter,
         plugins: &mut Vec<Box<dyn Plugin>>,
         current_frame: &mut Frame,
@@ -231,29 +186,29 @@ impl Interpreter {
 
         let resolver = function.get_resolver(data_store.link_context(), loader);
         for plugin in plugins.iter_mut() {
-            // let result =
-            //     plugin.pre_hook_fn(interpreter, current_frame, function, ty_args, &resolver);
-
-            // if let Err(err) = result {
-            //     interpreter.handle_plugin_error(
-            //         err,
-            //         function,
-            //         Some(current_frame),
-            //         Some(&resolver),
-            //         plugin.is_critical(),
-            //     )?;
-            // }
-            plugin.pre_hook_fn(interpreter, current_frame, function, ty_args, &resolver)?;
+            let result = plugin.pre_fn(interpreter, current_frame, function, ty_args, &resolver);
+            Self::handle_plugin_error(result, plugin.is_critical())?;
         }
 
         Ok(())
     }
 
-    pub fn post_hook_fn(gas_meter: &mut impl GasMeter, function: &Arc<Function>) -> () {
+    pub fn post_fn(
+        _interpreter: &mut Interpreter,
+        plugins: &mut Vec<Box<dyn Plugin>>,
+        gas_meter: &mut impl GasMeter,
+        function: &Arc<Function>,
+    ) -> VMResult<()> {
         profile_close_frame!(gas_meter, function.pretty_string());
+        for plugin in plugins.iter_mut() {
+            let result = plugin.post_fn(function);
+            Self::handle_plugin_error(result, plugin.is_critical())?;
+        }
+
+        Ok(())
     }
 
-    pub fn pre_hook_instr(
+    pub fn pre_instr(
         interpreter: &mut Interpreter,
         plugins: &mut Vec<Box<dyn Plugin>>,
         gas_meter: &mut impl GasMeter,
@@ -264,7 +219,7 @@ impl Interpreter {
         resolver: &Resolver,
     ) -> PartialVMResult<()> {
         for plugin in plugins.iter_mut() {
-            plugin.pre_hook_instr(
+            plugin.pre_instr(
                 interpreter,
                 function,
                 instruction,
@@ -278,7 +233,7 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn post_hook_instr(
+    pub fn post_instr(
         interpreter: &mut Interpreter,
         plugins: &mut Vec<Box<dyn Plugin>>,
         gas_meter: &mut impl GasMeter,
@@ -290,7 +245,7 @@ impl Interpreter {
     ) -> PartialVMResult<()> {
         profile_close_instr!(gas_meter, format!("{:?}", instruction));
         for plugin in plugins.iter_mut() {
-            plugin.post_hook_instr(interpreter, function, instruction, ty_args, resolver, r)?;
+            plugin.post_instr(interpreter, function, instruction, ty_args, resolver, r)?;
         }
         Ok(())
     }
@@ -319,8 +274,7 @@ impl Interpreter {
             plugins = vec![Box::new(ParanoidTypeChecker::new())];
         }
 
-        Self::pre_hook_entrypoint(
-            &mut interpreter,
+        Self::pre_entrypoint(
             &mut plugins,
             gas_meter,
             &function,
@@ -328,6 +282,8 @@ impl Interpreter {
             data_store,
             loader,
         )?;
+
+        let result: VMResult<Vec<Value>>;
 
         if function.is_native() {
             for arg in args {
@@ -359,11 +315,11 @@ impl Interpreter {
                         .finish(Location::Undefined),
                 })?;
 
-            Self::post_hook_fn(gas_meter, &function);
+            Self::post_fn(&mut interpreter, &mut plugins, gas_meter, &function)?;
 
-            Ok(return_values.into_iter().collect())
+            result = Ok(return_values.into_iter().collect());
         } else {
-            interpreter.execute_main(
+            result = interpreter.execute_main(
                 loader,
                 data_store,
                 gas_meter,
@@ -372,8 +328,11 @@ impl Interpreter {
                 ty_args,
                 args,
                 &mut plugins,
-            )
+            );
         }
+
+        Self::post_entrypoint(&mut plugins)?;
+        result
     }
 
     /// Main loop for the execution of a function.
@@ -428,7 +387,7 @@ impl Interpreter {
                         .charge_drop_frame(non_ref_vals.into_iter())
                         .map_err(|e| self.set_location(e))?;
 
-                    Self::post_hook_fn(gas_meter, &current_frame.function);
+                    Self::post_fn(&mut self, plugins, gas_meter, &current_frame.function)?;
 
                     if let Some(frame) = self.call_stack.pop() {
                         // Note: the caller will find the callee's return values at the top of the shared operand stack
@@ -441,7 +400,7 @@ impl Interpreter {
                 }
                 ExitCode::Call(fh_idx) => {
                     let func = resolver.function_from_handle(fh_idx);
-                    Self::pre_hook_fn(
+                    Self::pre_fn(
                         &mut self,
                         plugins,
                         &mut current_frame,
@@ -482,7 +441,7 @@ impl Interpreter {
                         )?;
                         current_frame.pc += 1; // advance past the Call instruction in the caller
 
-                        Self::post_hook_fn(gas_meter, &func);
+                        Self::post_fn(&mut self, plugins, gas_meter, &func)?;
                         continue;
                     }
                     let frame = self
@@ -503,7 +462,7 @@ impl Interpreter {
                         .instantiate_generic_function(idx, current_frame.ty_args())
                         .map_err(|e| set_err_info!(current_frame, e))?;
                     let func = resolver.function_from_instantiation(idx);
-                    Self::pre_hook_fn(
+                    Self::pre_fn(
                         &mut self,
                         plugins,
                         &mut current_frame,
@@ -545,7 +504,7 @@ impl Interpreter {
                         )?;
                         current_frame.pc += 1; // advance past the Call instruction in the caller
 
-                        Self::post_hook_fn(gas_meter, &func);
+                        Self::post_fn(&mut self, plugins, gas_meter, &func)?;
                         continue;
                     }
                     let frame = self
@@ -1862,7 +1821,7 @@ impl Frame {
                 // The reason for this design is we charge gas during instruction execution and we want to perform checks only after
                 // proper gas has been charged for each instruction.
 
-                Interpreter::pre_hook_instr(
+                Interpreter::pre_instr(
                     interpreter,
                     plugins,
                     gas_meter,
@@ -1885,7 +1844,7 @@ impl Frame {
                     instruction,
                 )?;
 
-                Interpreter::post_hook_instr(
+                Interpreter::post_instr(
                     interpreter,
                     plugins,
                     gas_meter,
