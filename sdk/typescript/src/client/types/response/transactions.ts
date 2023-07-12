@@ -138,6 +138,13 @@ export type SuiCallArg =
 			objectId: string;
 			initialSharedVersion: string;
 			mutable: boolean;
+	  }
+	| {
+			type: 'object';
+			objectType: 'receiving';
+			objectId: string;
+			version: string;
+			digest: string;
 	  };
 
 export type SuiTransaction =
