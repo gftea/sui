@@ -88,7 +88,7 @@ pub fn execute<Mode: ExecutionMode>(
     let mut mode_results = Mode::empty_results();
     for (idx, command) in commands.into_iter().enumerate() {
         if let Err(err) = execute_command::<Mode>(&mut context, &mut mode_results, command) {
-            let object_runtime: &ObjectRuntime = context.session.get_native_extensions().get();
+            let object_runtime: &ObjectRuntime = context.object_runtime();
             // We still need to record the loaded child objects for replay
             let loaded_child_objects = object_runtime.loaded_child_objects();
             drop(context);
@@ -98,7 +98,7 @@ pub fn execute<Mode: ExecutionMode>(
     }
 
     // Save loaded objects table in case we fail in post execution
-    let object_runtime: &ObjectRuntime = context.session.get_native_extensions().get();
+    let object_runtime: &ObjectRuntime = context.object_runtime();
     // We still need to record the loaded child objects for replay
     let loaded_child_objects = object_runtime.loaded_child_objects();
 
@@ -143,7 +143,8 @@ fn execute_command<Mode: ExecutionMode>(
                 .map_err(|e| context.convert_vm_error(e))?;
             let ty = Type::Vector(Box::new(elem_ty));
             let abilities = context
-                .session
+                .vm
+                .get_runtime()
                 .get_type_abilities(&ty)
                 .map_err(|e| context.convert_vm_error(e))?;
             // BCS layout for any empty vector should be the same
@@ -187,7 +188,8 @@ fn execute_command<Mode: ExecutionMode>(
             }
             let ty = Type::Vector(Box::new(elem_ty));
             let abilities = context
-                .session
+                .vm
+                .get_runtime()
                 .get_type_abilities(&ty)
                 .map_err(|e| context.convert_vm_error(e))?;
             vec![Value::Raw(
@@ -440,9 +442,7 @@ fn make_value(
         ValueKind::Object {
             type_,
             has_public_transfer,
-        } => Value::Object(make_object_value(
-            context.vm,
-            &mut context.session,
+        } => Value::Object(context.make_object_value(
             type_,
             has_public_transfer,
             used_in_non_entry_move_call,
@@ -492,27 +492,24 @@ fn execute_move_publish<Mode: ExecutionMode>(
     // For newly published packages, runtime ID matches storage ID.
     let storage_id = runtime_id;
     let dependencies = fetch_packages(context, &dep_ids)?;
-    let package_obj = context.new_package(&modules, &dependencies)?;
+    let package = context.new_package(&modules, &dependencies)?;
 
-    let Some(package) = package_obj.data.try_as_package() else {
-        invariant_violation!("Newly created package object is not a package");
-    };
-
-    context.set_linkage(package)?;
+    context.set_linkage(&package)?;
+    context.write_package(package);
     let res = publish_and_verify_modules(context, runtime_id, &modules)
         .and_then(|_| init_modules::<Mode>(context, argument_updates, &modules));
     context.reset_linkage();
+    if res.is_err() {
+        context.pop_last_package();
+    }
     res?;
 
-    context.write_package(package_obj)?;
     let values = if Mode::packages_are_predefined() {
         // no upgrade cap for genesis modules
         vec![]
     } else {
         let cap = &UpgradeCap::new(context.fresh_id()?, storage_id);
-        vec![Value::Object(make_object_value(
-            context.vm,
-            &mut context.session,
+        vec![Value::Object(context.make_object_value(
             UpgradeCap::type_().into(),
             /* has_public_transfer */ true,
             /* used_in_non_entry_move_call */ false,
@@ -598,21 +595,17 @@ fn execute_move_upgrade<Mode: ExecutionMode>(
     let storage_id = context.tx_context.fresh_id();
 
     let dependencies = fetch_packages(context, &dep_ids)?;
-    let package_obj =
+    let package =
         context.upgrade_package(storage_id, &current_package, &modules, &dependencies)?;
 
-    let Some(package) = package_obj.data.try_as_package() else {
-        invariant_violation!("Newly created package object is not a package");
-    };
-
-    context.set_linkage(package)?;
+    context.set_linkage(&package)?;
     let res = publish_and_verify_modules(context, runtime_id, &modules);
     context.reset_linkage();
     res?;
 
     check_compatibility(context, &current_package, &modules, upgrade_ticket.policy)?;
 
-    context.write_package(package_obj)?;
+    context.write_package(package);
     Ok(vec![Value::Raw(
         RawValueType::Loaded {
             ty: upgrade_receipt_type,
@@ -762,13 +755,11 @@ fn vm_move_call(
     }
     // script visibility checked manually for entry points
     let mut result = context
-        .session
         .execute_function_bypass_visibility(
             module_id,
             function,
             type_arguments,
             serialized_arguments,
-            context.gas_charger.move_gas_status_mut(),
         )
         .map_err(|e| context.convert_vm_error(e))?;
 
@@ -834,13 +825,9 @@ fn publish_and_verify_modules(
         })
         .collect();
     context
-        .session
         .publish_module_bundle(
             new_module_bytes,
             AccountAddress::from(package_id),
-            // TODO: publish_module_bundle() currently doesn't charge gas.
-            // Do we want to charge there?
-            context.gas_charger.move_gas_status_mut(),
         )
         .map_err(|e| context.convert_vm_error(e))?;
 
@@ -874,7 +861,7 @@ fn init_modules<Mode: ExecutionMode>(
     });
 
     for module_id in modules_to_init {
-        let return_values = execute_move_call::<Mode>(
+        match execute_move_call::<Mode>(
             context,
             argument_updates,
             &module_id,
@@ -882,12 +869,16 @@ fn init_modules<Mode: ExecutionMode>(
             vec![],
             vec![],
             /* is_init */ true,
-        )?;
-
-        assert_invariant!(
-            return_values.is_empty(),
-            "init should not have return values"
-        )
+        ) {
+            Ok(return_values) => assert_invariant!(
+                return_values.is_empty(),
+                "init should not have return values"
+            ),
+            Err(err) => {
+                context.linkage_view.unpublish_package(modules);
+                return Err(err);
+            }
+        }
     }
 
     Ok(())
@@ -940,12 +931,7 @@ fn check_visibility_and_signature<Mode: ExecutionMode>(
     from_init: bool,
 ) -> Result<LoadedFunctionInfo, ExecutionError> {
     if from_init {
-        // the session is weird and does not load the module on publishing. This is a temporary
-        // work around, since loading the function through the session will cause the module
-        // to be loaded through the sessions data store.
-        let result = context
-            .session
-            .load_function(module_id, function, type_arguments);
+        let result = context.load_function(module_id, function, type_arguments);
         assert_invariant!(
             result.is_ok(),
             "The modules init should be able to be loaded"
@@ -953,7 +939,8 @@ fn check_visibility_and_signature<Mode: ExecutionMode>(
     }
     let module = context
         .vm
-        .load_module(module_id, context.session.get_resolver())
+        .get_runtime()
+        .load_module(module_id, context.resolver())
         .map_err(|e| context.convert_vm_error(e))?;
     let Some((index, fdef)) = module.function_defs.iter().enumerate().find(|(_index, fdef)| {
         module.identifier_at(module.function_handle_at(fdef.function).name) == function
@@ -1004,7 +991,6 @@ fn check_visibility_and_signature<Mode: ExecutionMode>(
         }
     };
     let signature = context
-        .session
         .load_function(module_id, function, type_arguments)
         .map_err(|e| context.convert_vm_error(e))?;
     let signature =
@@ -1084,7 +1070,8 @@ fn check_non_entry_signature<Mode: ExecutionMode>(
                 t => t,
             };
             let abilities = context
-                .session
+                .vm
+                .get_runtime()
                 .get_type_abilities(return_type)
                 .map_err(|e| context.convert_vm_error(e))?;
             Ok(match return_type {
@@ -1092,7 +1079,8 @@ fn check_non_entry_signature<Mode: ExecutionMode>(
                 Type::TyParam(_) => invariant_violation!("TyParam should have been substituted"),
                 Type::Struct(_) | Type::StructInstantiation(_, _) if abilities.has_key() => {
                     let type_tag = context
-                        .session
+                        .vm
+                        .get_runtime()
                         .get_type_tag(return_type)
                         .map_err(|e| context.convert_vm_error(e))?;
                     let TypeTag::Struct(struct_tag) = type_tag else {
@@ -1222,7 +1210,8 @@ fn build_move_args<Mode: ExecutionMode>(
                 }) = &value
                 {
                     let type_tag = context
-                        .session
+                        .vm
+                        .get_runtime()
                         .get_type_tag(type_)
                         .map_err(|e| context.convert_vm_error(e))?;
                     let TypeTag::Struct(struct_tag) = type_tag else {
@@ -1235,7 +1224,8 @@ fn build_move_args<Mode: ExecutionMode>(
                     }
                 } else {
                     let abilities = context
-                        .session
+                        .vm
+                        .get_runtime()
                         .get_type_abilities(inner)
                         .map_err(|e| context.convert_vm_error(e))?;
                     ValueKind::Raw((**inner).clone(), abilities)
@@ -1344,7 +1334,7 @@ pub fn is_tx_context(
         _ => return Ok(TxContextKind::None),
     };
     let Type::Struct(idx) = &**inner else { return Ok(TxContextKind::None) };
-    let Some(s) = context.session.get_struct_type(*idx) else {
+    let Some(s) = context.vm.get_runtime().get_struct_type(*idx) else {
         invariant_violation!("Loaded struct not found")
     };
     let (module_addr, module_name, struct_name) = get_struct_ident(&s);
@@ -1386,7 +1376,7 @@ fn primitive_serialization_layout(
             info_opt.map(|layout| PrimitiveArgumentLayout::Vector(Box::new(layout)))
         }
         Type::StructInstantiation(idx, targs) => {
-            let Some(s) = context.session.get_struct_type(*idx) else {
+            let Some(s) = context.vm.get_runtime().get_struct_type(*idx) else {
                 invariant_violation!("Loaded struct not found")
             };
             let resolved_struct = get_struct_ident(&s);
@@ -1399,7 +1389,7 @@ fn primitive_serialization_layout(
             }
         }
         Type::Struct(idx) => {
-            let Some(s) = context.session.get_struct_type(*idx) else {
+            let Some(s) = context.vm.get_runtime().get_struct_type(*idx) else {
                 invariant_violation!("Loaded struct not found")
             };
             let resolved_struct = get_struct_ident(&s);

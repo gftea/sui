@@ -1,18 +1,26 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use move_binary_format::errors::{Location, PartialVMError, PartialVMResult, VMResult};
+use move_binary_format::CompiledModule;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     str::FromStr,
 };
 
+use move_core_types::gas_algebra::NumBytes;
+use move_core_types::value::MoveTypeLayout;
+use move_core_types::vm_status::StatusCode;
 use move_core_types::{
     account_address::AccountAddress,
     identifier::{IdentStr, Identifier},
     language_storage::{ModuleId, StructTag},
     resolver::{LinkageResolver, ModuleResolver, ResourceResolver},
 };
+use move_vm_types::data_store::DataStore;
+use move_vm_types::loaded_data::runtime_types::Type;
+use move_vm_types::values::{GlobalValue, Value};
 use sui_types::{
     base_types::ObjectID,
     error::{ExecutionError, SuiError, SuiResult},
@@ -40,6 +48,8 @@ pub struct LinkageView<'state> {
     /// Cache of past package addresses that have been the link context -- if a package is in this
     /// set, then we will not try to load its type origin table when setting it as a context (again).
     past_contexts: RefCell<HashSet<ObjectID>>,
+    /// Modules published for the session using this LinkageView.
+    published_modules: BTreeMap<ModuleId, Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -58,6 +68,7 @@ impl<'state> LinkageView<'state> {
             linkage_info: None,
             type_origin_cache: RefCell::new(HashMap::new()),
             past_contexts: RefCell::new(HashSet::new()),
+            published_modules: BTreeMap::new(),
         }
     }
 
@@ -191,20 +202,6 @@ impl<'state> LinkageView<'state> {
 
         Ok(())
     }
-}
-
-impl From<&MovePackage> for LinkageInfo {
-    fn from(package: &MovePackage) -> Self {
-        Self {
-            storage_id: package.id().into(),
-            runtime_id: package.original_package_id().into(),
-            link_table: package.linkage_table().clone(),
-        }
-    }
-}
-
-impl<'state> LinkageResolver for LinkageView<'state> {
-    type Error = SuiError;
 
     fn link_context(&self) -> AccountAddress {
         self.linkage_info
@@ -212,7 +209,7 @@ impl<'state> LinkageResolver for LinkageView<'state> {
             .map_or(AccountAddress::ZERO, |l| l.storage_id)
     }
 
-    fn relocate(&self, module_id: &ModuleId) -> Result<ModuleId, Self::Error> {
+    fn relocate(&self, module_id: &ModuleId) -> Result<ModuleId, SuiError> {
         let Some(linkage) = &self.linkage_info else {
             invariant_violation!("No linkage context set while relocating {module_id}.")
         };
@@ -244,7 +241,7 @@ impl<'state> LinkageResolver for LinkageView<'state> {
         &self,
         runtime_id: &ModuleId,
         struct_: &IdentStr,
-    ) -> Result<ModuleId, Self::Error> {
+    ) -> Result<ModuleId, SuiError> {
         if self.linkage_info.is_none() {
             invariant_violation!(
                 "No linkage context set for defining module query on {runtime_id}::{struct_}."
@@ -279,6 +276,42 @@ impl<'state> LinkageResolver for LinkageView<'state> {
             package.version(),
         )
     }
+
+    pub(crate) fn unpublish_package(&mut self, modules: &[CompiledModule]) {
+        for module in modules {
+            self.published_modules.remove(&module.self_id());
+        }
+    }
+}
+
+impl From<&MovePackage> for LinkageInfo {
+    fn from(package: &MovePackage) -> Self {
+        Self {
+            storage_id: package.id().into(),
+            runtime_id: package.original_package_id().into(),
+            link_table: package.linkage_table().clone(),
+        }
+    }
+}
+
+impl<'state> LinkageResolver for LinkageView<'state> {
+    type Error = SuiError;
+
+    fn link_context(&self) -> AccountAddress {
+        LinkageView::link_context(self)
+    }
+
+    fn relocate(&self, module_id: &ModuleId) -> Result<ModuleId, Self::Error> {
+        LinkageView::relocate(self, module_id)
+    }
+
+    fn defining_module(
+        &self,
+        runtime_id: &ModuleId,
+        struct_: &IdentStr,
+    ) -> Result<ModuleId, Self::Error> {
+        LinkageView::defining_module(self, runtime_id, struct_)
+    }
 }
 
 /** Remaining implementations delegated to state_view *************************/
@@ -306,5 +339,84 @@ impl<'state> ModuleResolver for LinkageView<'state> {
 impl<'state> BackingPackageStore for LinkageView<'state> {
     fn get_package_object(&self, package_id: &ObjectID) -> SuiResult<Option<Object>> {
         self.resolver.get_package_object(package_id)
+    }
+}
+
+impl<'state> DataStore for LinkageView<'state> {
+    fn link_context(&self) -> AccountAddress {
+        LinkageView::link_context(self)
+    }
+
+    fn relocate(&self, module_id: &ModuleId) -> PartialVMResult<ModuleId> {
+        LinkageView::relocate(self, module_id).map_err(|err| {
+            PartialVMError::new(StatusCode::LINKER_ERROR)
+                .with_message(format!("Error relocating {module_id}: {err:?}"))
+        })
+    }
+
+    fn defining_module(
+        &self,
+        runtime_id: &ModuleId,
+        struct_: &IdentStr,
+    ) -> PartialVMResult<ModuleId> {
+        LinkageView::defining_module(self, runtime_id, struct_).map_err(|err| {
+            PartialVMError::new(StatusCode::LINKER_ERROR).with_message(format!(
+                "Error finding defining module for {runtime_id}::{struct_}: {err:?}"
+            ))
+        })
+    }
+
+    fn load_module(&self, module_id: &ModuleId) -> VMResult<Vec<u8>> {
+        if let Some(bytes) = self.published_modules.get(module_id) {
+            return Ok(bytes.clone());
+        }
+        match self.get_module(module_id) {
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => Err(PartialVMError::new(StatusCode::LINKER_ERROR)
+                .with_message(format!("Cannot find {:?} in data cache", module_id))
+                .finish(Location::Undefined)),
+            Err(err) => {
+                let msg = format!("Unexpected storage error: {:?}", err);
+                Err(
+                    PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                        .with_message(msg)
+                        .finish(Location::Undefined),
+                )
+            }
+        }
+    }
+
+    fn publish_module(&mut self, module_id: &ModuleId, blob: Vec<u8>) -> VMResult<()> {
+        // Module published are stored in `context` and will be picked up from there.
+        // Nothing to do here...
+        self.published_modules.insert(module_id.clone(), blob);
+        Ok(())
+    }
+
+    //
+    // TODO: later we will clean up the interface with the runtime and the functions below
+    //       will likely be exposed via extensions
+    //
+
+    fn load_resource(
+        &mut self,
+        _addr: AccountAddress,
+        _ty: &Type,
+    ) -> PartialVMResult<(&mut GlobalValue, Option<Option<NumBytes>>)> {
+        panic!("load_resource should never be called for LinkageView")
+    }
+
+    fn emit_event(
+        &mut self,
+        _guid: Vec<u8>,
+        _seq_num: u64,
+        _ty: Type,
+        _val: Value,
+    ) -> PartialVMResult<()> {
+        panic!("emit_event should never be called for LinkageView")
+    }
+
+    fn events(&self) -> &Vec<(Vec<u8>, u64, Type, MoveTypeLayout, Value)> {
+        panic!("events should never be called for LinkageView")
     }
 }

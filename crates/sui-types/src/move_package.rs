@@ -16,6 +16,7 @@ use move_binary_format::access::ModuleAccess;
 use move_binary_format::binary_views::BinaryIndexedView;
 use move_binary_format::file_format::CompiledModule;
 use move_binary_format::normalized;
+use move_core_types::language_storage::ModuleId;
 use move_core_types::{
     account_address::AccountAddress,
     ident_str,
@@ -380,6 +381,14 @@ impl MovePackage {
             type_origin_table,
             linkage_table,
         )
+    }
+
+    pub fn get_module(&self, module_id: &ModuleId) -> Option<&Vec<u8>> {
+        if self.id != ObjectID::from(*module_id.address()) {
+            None
+        } else {
+            self.module_map.get(&module_id.name().to_string())
+        }
     }
 
     /// Return the size of the package in bytes
