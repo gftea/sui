@@ -6,7 +6,7 @@ use crate::{
     loader::{Function, Loader, Resolver},
     native_functions::NativeContext,
     paranoid_type_checker::ParanoidTypeChecker,
-    plugin::{Plugin, Severity},
+    plugin::Plugin,
     trace,
 };
 use fail::fail_point;
@@ -101,11 +101,25 @@ impl<'a, 'b> TypeView for TypeWithLoader<'a, 'b> {
 
 pub trait InterpreterInterface {
     fn get_stack_len(&self) -> usize;
+    fn get_internal_state(&self) -> ExecutionState;
+    fn set_location(&self, err: PartialVMError) -> VMError;
+    fn maybe_core_dump(&self, err: VMError, frame: &Frame) -> VMError;
 }
 
 impl InterpreterInterface for Interpreter {
     fn get_stack_len(&self) -> usize {
         self.get_stack_len()
+    }
+    fn get_internal_state(&self) -> ExecutionState {
+        self.get_internal_state()
+    }
+
+    fn set_location(&self, err: PartialVMError) -> VMError {
+        self.set_location(err)
+    }
+
+    fn maybe_core_dump(&self, err: VMError, frame: &Frame) -> VMError {
+        self.maybe_core_dump(err, frame)
     }
 }
 
@@ -121,15 +135,12 @@ impl Interpreter {
         function: &Arc<Function>,
         current_frame: Option<&Frame>,
         resolver: Option<&Resolver>,
-        severity: Severity,
+        is_critical: bool,
     ) -> VMResult<()> {
-        match severity {
-            Severity::Critical => {
-                return self.handle_error_for_function(err, function, current_frame, resolver)
-            }
-            Severity::NonCritical => {
-                error!("Plugin error: {:?}", err);
-            }
+        if is_critical {
+            return self.handle_error_for_function(err, function, current_frame, resolver);
+        } else {
+            error!("Plugin error: {:?}", err);
         }
         Ok(())
     }
@@ -188,17 +199,18 @@ impl Interpreter {
         let resolver = function.get_resolver(data_store.link_context(), loader);
 
         for plugin in plugins.iter_mut() {
-            let result = plugin.pre_hook_entrypoint(function, ty_args, &resolver);
+            plugin.pre_hook_entrypoint(function, ty_args, &resolver)?;
+            // let result = plugin.pre_hook_entrypoint(function, ty_args, &resolver);
 
-            if let Err(err) = result {
-                interpreter.handle_plugin_error(
-                    err,
-                    function,
-                    None,
-                    None,
-                    plugin.get_severity(),
-                )?;
-            }
+            // if let Err(err) = result {
+            //     interpreter.handle_plugin_error(
+            //         err,
+            //         function,
+            //         None,
+            //         None,
+            //         plugin.is_critical(),
+            //     )?;
+            // }
         }
 
         Ok(())
@@ -219,18 +231,19 @@ impl Interpreter {
 
         let resolver = function.get_resolver(data_store.link_context(), loader);
         for plugin in plugins.iter_mut() {
-            let result =
-                plugin.pre_hook_fn(interpreter, current_frame, function, ty_args, &resolver);
+            // let result =
+            //     plugin.pre_hook_fn(interpreter, current_frame, function, ty_args, &resolver);
 
-            if let Err(err) = result {
-                interpreter.handle_plugin_error(
-                    err,
-                    function,
-                    Some(current_frame),
-                    Some(&resolver),
-                    plugin.get_severity(),
-                )?;
-            }
+            // if let Err(err) = result {
+            //     interpreter.handle_plugin_error(
+            //         err,
+            //         function,
+            //         Some(current_frame),
+            //         Some(&resolver),
+            //         plugin.is_critical(),
+            //     )?;
+            // }
+            plugin.pre_hook_fn(interpreter, current_frame, function, ty_args, &resolver)?;
         }
 
         Ok(())

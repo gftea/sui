@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
-use move_binary_format::{errors::PartialVMResult, file_format::Bytecode};
+use move_binary_format::{
+    errors::{PartialVMResult, VMResult},
+    file_format::Bytecode,
+};
 use move_vm_types::{loaded_data::runtime_types::Type, values::Locals};
 
 use crate::{
@@ -11,21 +14,15 @@ use crate::{
     loader::{Function, Resolver},
 };
 
-#[derive(Clone, Copy)]
-pub enum Severity {
-    Critical,
-    NonCritical,
-}
-
 pub(crate) trait Plugin {
-    fn get_severity(&self) -> Severity;
+    fn is_critical(&self) -> bool;
 
     fn pre_hook_entrypoint(
         &mut self,
         function: &Arc<Function>,
         ty_args: &[Type],
         resolver: &Resolver,
-    ) -> PartialVMResult<()>;
+    ) -> VMResult<()>;
 
     fn pre_hook_fn(
         &mut self,
@@ -34,7 +31,7 @@ pub(crate) trait Plugin {
         function: &Arc<Function>,
         ty_args: &[Type],
         resolver: &Resolver,
-    ) -> PartialVMResult<()>;
+    ) -> VMResult<()>;
 
     fn post_hook_fn(
         &mut self,

@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use move_binary_format::errors::PartialVMResult;
+use move_binary_format::errors::{Location, PartialVMResult, VMResult};
 use std::sync::Arc;
 
 use move_binary_format::{
@@ -14,7 +14,7 @@ use move_vm_types::{loaded_data::runtime_types::Type, values::Locals};
 use crate::{
     interpreter::{check_ability, FrameInterface, InstrRet, InterpreterInterface},
     loader::{Function, Resolver},
-    plugin::{Plugin, Severity},
+    plugin::Plugin,
 };
 
 struct TypeStack {
@@ -64,12 +64,11 @@ impl TypeStack {
 
 pub struct ParanoidTypeChecker {
     type_stack: TypeStack,
-    severity: Severity,
 }
 
 impl Plugin for ParanoidTypeChecker {
-    fn get_severity(&self) -> Severity {
-        self.severity
+    fn is_critical(&self) -> bool {
+        true
     }
 
     fn pre_hook_entrypoint(
@@ -77,27 +76,60 @@ impl Plugin for ParanoidTypeChecker {
         function: &Arc<Function>,
         ty_args: &[Type],
         resolver: &Resolver,
-    ) -> PartialVMResult<()> {
+    ) -> VMResult<()> {
         if function.is_native() {
-            self.push_parameter_types(&function, &ty_args, &resolver)?;
-            self.check_parameter_types(&function, ty_args, &resolver)?;
+            self.push_parameter_types(&function, &ty_args, &resolver)
+                .map_err(|e| e.finish(Location::Undefined))?;
+            self.check_parameter_types(&function, ty_args, &resolver)
+                .map_err(|e| match function.module_id() {
+                    Some(id) => e
+                        .at_code_offset(function.index(), 0)
+                        .finish(Location::Module(id.clone())),
+                    None => PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                        .with_message(
+                            "Unexpected native function not located in a module".to_owned(),
+                        )
+                        .finish(Location::Undefined),
+                })?;
         }
         Ok(())
     }
 
     fn pre_hook_fn(
         &mut self,
-        _interpreter: &dyn InterpreterInterface,
+        interpreter: &dyn InterpreterInterface,
         current_frame: &dyn FrameInterface,
         function: &Arc<Function>,
         ty_args: &[Type],
         resolver: &Resolver,
-    ) -> PartialVMResult<()> {
-        self.check_friend_or_private_call(current_frame.function(), &function)?;
+    ) -> VMResult<()> {
+        self.check_friend_or_private_call(current_frame.function(), &function)
+            .map_err(|e| interpreter.set_location(e))?;
         if function.is_native() {
-            self.native_function(&function, ty_args, &resolver)?;
+            self.native_function(&function, ty_args, &resolver)
+                .map_err(|e| match function.module_id() {
+                    Some(id) => {
+                        let e = if resolver.loader().vm_config().error_execution_state {
+                            e.with_exec_state(interpreter.get_internal_state())
+                        } else {
+                            e
+                        };
+                        e.at_code_offset(function.index(), 0)
+                            .finish(Location::Module(id.clone()))
+                    }
+                    None => {
+                        let err =
+                            PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                                .with_message(
+                                    "Unexpected native function not located in a module".to_owned(),
+                                );
+                        interpreter.set_location(err)
+                    }
+                })?;
         } else {
-            self.non_native_function(&function, &ty_args, &resolver)?;
+            self.non_native_function(&function, &ty_args, &resolver)
+                .map_err(|e| interpreter.set_location(e))
+                .map_err(|err| interpreter.maybe_core_dump(err, current_frame.get_frame()))?;
         }
         Ok(())
     }
@@ -146,7 +178,6 @@ impl ParanoidTypeChecker {
     pub fn new() -> Self {
         Self {
             type_stack: TypeStack::new(),
-            severity: Severity::Critical,
         }
     }
 
