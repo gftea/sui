@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use hyper::body::HttpBody;
+use jsonrpsee::types::error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
@@ -221,7 +222,7 @@ impl Logger for MetricsLogger {
             .observe(req_latency_secs);
 
         if let Some(code) = error_code {
-            if code == -32000 {
+            if code == CALL_EXECUTION_FAILED_CODE || code == INTERNAL_ERROR_CODE {
                 self.metrics
                     .server_errors_by_route
                     .with_label_values(&[method_name])
