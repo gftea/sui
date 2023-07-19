@@ -85,7 +85,7 @@ async fn test_snapshot_basic() -> Result<(), anyhow::Error> {
         directory: Some(restored_local),
         ..Default::default()
     };
-    let mut snapshot_reader = StateSnapshotReaderV1::new(
+    let snapshot_reader = StateSnapshotReaderV1::new(
         0,
         &remote_store_config,
         &local_store_restore_config,

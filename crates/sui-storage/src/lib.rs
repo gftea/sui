@@ -147,7 +147,7 @@ pub fn make_iterator<T: DeserializeOwned, R: Read + 'static>(
 
 pub fn verify_checkpoint<S>(
     current: &VerifiedCheckpoint,
-    store: Arc<S>,
+    store: S,
     checkpoint: CertifiedCheckpointSummary,
 ) -> Result<VerifiedCheckpoint, CertifiedCheckpointSummary>
 where

@@ -147,7 +147,7 @@ impl ArchiveReader {
         checkpoint_counter: Arc<AtomicU64>,
     ) -> Result<()>
     where
-        S: WriteStore + Clone,
+        S: WriteStore + Clone + Send + Sync,
         <S as ReadStore>::Error: std::error::Error,
     {
         let manifest = self.manifest.lock().await.clone();
@@ -215,7 +215,7 @@ impl ArchiveReader {
             Err(index) => index,
         };
 
-        let store_ref = Arc::new(store);
+        // let store_ref = Arc::new(store);
 
         let remote_object_store = self.remote_object_store.clone();
         futures::stream::iter(files.iter())
@@ -256,18 +256,18 @@ impl ArchiveReader {
                         })
                         .try_for_each(|(summary, contents)| {
                             let verified_checkpoint =
-                                get_or_insert_verified_checkpoint(store_ref.clone(), summary)?;
+                                get_or_insert_verified_checkpoint(store.clone(), summary)?;
                             // Verify content
                             let digest = verified_checkpoint.content_digest;
                             contents.verify_digests(digest)?;
                             let verified_contents =
                                 VerifiedCheckpointContents::new_unchecked(contents.clone());
                             // Insert content
-                            store_ref
+                            store
                                 .insert_checkpoint_contents(&verified_checkpoint, verified_contents)
                                 .map_err(|e| anyhow!("Failed to insert content: {e}"))?;
                             // Update highest synced watermark
-                            store_ref
+                            store
                                 .update_highest_synced_checkpoint(&verified_checkpoint)
                                 .map_err(|e| anyhow!("Failed to update watermark: {e}"))?;
                             txn_counter.fetch_add(contents.size() as u64, Ordering::Relaxed);
@@ -337,13 +337,13 @@ impl ArchiveReader {
 
 pub async fn load_summaries_upto<S>(
     epoch: EpochId,
-    store: Arc<S>,
+    store: S,
     manifest: Manifest,
     concurrency: usize,
     remote_object_store: Arc<DynObjectStore>,
 ) -> Result<()>
 where
-    S: WriteStore + Clone,
+    S: WriteStore + Clone + Send + Sync,
     <S as ReadStore>::Error: std::error::Error,
 {
     if epoch > manifest.epoch_num() {
@@ -415,11 +415,11 @@ where
 
 /// Insert checkpoint summary if it doesn't already exist after verifying it
 fn get_or_insert_verified_checkpoint<S>(
-    store: Arc<S>,
+    store: S,
     certified_checkpoint: CertifiedCheckpointSummary,
 ) -> Result<VerifiedCheckpoint>
 where
-    S: WriteStore + Clone,
+    S: WriteStore + Clone + Send + Sync,
     <S as ReadStore>::Error: std::error::Error,
 {
     store

@@ -271,11 +271,11 @@ impl SuiNode {
             Some(perpetual_options.options),
         ));
 
-        let mut is_genesis = perpetual_tables
+        let is_genesis = perpetual_tables
             .database_is_empty()
             .expect("Database read should not fail at init.");
         let store = AuthorityStore::open(
-            perpetual_tables,
+            perpetual_tables.clone(),
             genesis,
             &committee_store,
             config.indirect_objects_threshold,
@@ -344,22 +344,17 @@ impl SuiNode {
         // Create network
         // TODO only configure validators as seed/preferred peers for validators and not for
         // fullnodes once we've had a chance to re-work fullnode configuration generation.
-        let (trusted_peer_change_tx, trusted_peer_change_rx) = watch::channel(Default::default());
-
-        // Create network
-        // TODO only configure validators as seed/preferred peers for validators and not for
-        // fullnodes once we've had a chance to re-work fullnode configuration generation.
         let archive_readers = ArchiveReaderBalancer::new(config.archive_reader_config())?;
         let (trusted_peer_change_tx, trusted_peer_change_rx) = watch::channel(Default::default());
 
-        if let Some(snapshot_restore_config) = config.snapshot_restore_config {
+        if let Some(snapshot_restore_config) = config.snapshot_restore_config.clone() {
             if perpetual_tables
                 .database_is_empty()
                 .expect("Database read should not fail at init.")
             {
                 let restorer = SnapshotRestorer::new(
                     snapshot_restore_config,
-                    archive_readers.clone(),
+                    archive_readers.clone().into(),
                     config.db_path(),
                 )
                 .await?;
@@ -374,13 +369,14 @@ impl SuiNode {
                 // a new epoch with a new committee. To make things far easier to reason about,
                 // recurse here and allow pre-existing components to be re-initialized from
                 // new state.
-                SuiNode::start_async(
-                    &config,
-                    registry_service,
-                    node_once_cell,
-                    custom_rpc_runtime,
-                )
-                .await
+                // SuiNode::start_async(
+                //     &config,
+                //     registry_service.clone(),
+                //     node_once_cell.clone(),
+                //     custom_rpc_runtime.clone(),
+                // )
+                // .await?
+                return Ok(());
             }
         }
 

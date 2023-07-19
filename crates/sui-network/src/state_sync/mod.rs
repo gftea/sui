@@ -1017,7 +1017,7 @@ where
             let checkpoint = maybe_checkpoint.ok_or_else(|| {
                 anyhow::anyhow!("no peers were able to help sync checkpoint {next}")
             })?;
-            match verify_checkpoint(&current, Arc::new(store.clone()), checkpoint) {
+            match verify_checkpoint(&current, store.clone(), checkpoint) {
                 Ok(verified_checkpoint) => verified_checkpoint,
                 Err(checkpoint) => {
                     let mut peer_heights = peer_heights.write().unwrap();
