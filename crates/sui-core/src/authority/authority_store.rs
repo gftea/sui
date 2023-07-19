@@ -26,6 +26,7 @@ use sui_types::storage::{
     get_module_by_id, BackingPackageStore, ChildObjectResolver, DeleteKind, ObjectKey, ObjectStore,
 };
 use sui_types::sui_system_state::get_sui_system_state;
+use sui_types::temporary_store::DeletedSharedObjects;
 use sui_types::{base_types::SequenceNumber, fp_bail, fp_ensure, storage::ParentSync};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::time::Instant;
@@ -45,6 +46,7 @@ use mysten_common::sync::notify_read::NotifyRead;
 use sui_storage::package_object_cache::PackageObjectCache;
 use sui_types::effects::{TransactionEffects, TransactionEvents};
 use sui_types::gas_coin::TOTAL_SUPPLY_MIST;
+use sui_types::storage::MarkerKind::SharedObjectDeleted;
 use typed_store::rocks::util::is_ref_count_value;
 
 const NUM_SHARDS: usize = 4096;
@@ -400,6 +402,24 @@ impl AuthorityStore {
             .contains_key(digest)?)
     }
 
+    pub fn shared_object_deleted(
+        &self,
+        object_id: &ObjectID,
+        version: VersionNumber,
+        epoch_id: EpochId,
+    ) -> Result<bool, SuiError> {
+        let object_key = (
+            epoch_id,
+            ObjectKey(*object_id, version),
+            SharedObjectDeleted,
+        );
+        Ok(self
+            .perpetual_tables
+            .object_per_epoch_marker_table
+            .get(&object_key)?
+            .is_some())
+    }
+
     /// Returns future containing the state hash for the given epoch
     /// once available
     pub async fn notify_read_root_state_hash(
@@ -621,14 +641,16 @@ impl AuthorityStore {
 
     /// Checks if the input object identified by the InputKey exists, with support for non-system
     /// packages i.e. when version is None.
-    pub fn multi_input_objects_exist(
+    pub fn multi_input_objects_available(
         &self,
         keys: impl Iterator<Item = InputKey> + Clone,
+        epoch_id: EpochId,
     ) -> Result<Vec<bool>, SuiError> {
         let (keys_with_version, keys_without_version): (Vec<_>, Vec<_>) =
             keys.enumerate().partition(|(_, key)| key.1.is_some());
 
-        let versioned_results = keys_with_version.iter().map(|(idx, _)| *idx).zip(
+        let mut versioned_results = vec![];
+        for ((idx, input_key), found) in keys_with_version.iter().zip(
             self.perpetual_tables
                 .objects
                 .multi_get(
@@ -636,9 +658,17 @@ impl AuthorityStore {
                         .iter()
                         .map(|(_, k)| ObjectKey(k.0, k.1.unwrap())),
                 )?
-                .into_iter()
-                .map(|o| o.is_some()),
-        );
+                .into_iter(),
+        ) {
+            match found {
+                Some(_) => versioned_results.push((*idx, true)),
+                None => {
+                    let shared_object_deleted =
+                        self.shared_object_deleted(&input_key.0, input_key.1.unwrap(), epoch_id)?;
+                    versioned_results.push((*idx, shared_object_deleted));
+                }
+            }
+        }
 
         let unversioned_results = keys_without_version.into_iter().map(|(idx, key)| {
             (
@@ -654,6 +684,7 @@ impl AuthorityStore {
         });
 
         let mut results = versioned_results
+            .into_iter()
             .chain(unversioned_results)
             .collect::<Vec<_>>();
         results.sort_by_key(|(idx, _)| *idx);
@@ -692,12 +723,13 @@ impl AuthorityStore {
         digest: &TransactionDigest,
         objects: &[InputObjectKind],
         epoch_store: &AuthorityPerEpochStore,
-    ) -> Result<Vec<Object>, SuiError> {
+    ) -> Result<(Vec<Object>, DeletedSharedObjects), SuiError> {
         let shared_locks_cell: OnceCell<HashMap<_, _>> = OnceCell::new();
+        let mut deleted_shared_objects = Vec::new();
 
         let mut result = Vec::new();
         for kind in objects {
-            let obj = match kind {
+            match kind {
                 InputObjectKind::SharedMoveObject { id, .. } => {
                     let shared_locks = shared_locks_cell.get_or_try_init(|| {
                         Ok::<HashMap<ObjectID, SequenceNumber>, SuiError>(
@@ -713,22 +745,32 @@ impl AuthorityStore {
                         digest, id
                     )
                     });
-                    self.get_object_by_key(id, *version)?.unwrap_or_else(|| {
-                        panic!("All dependencies of tx {:?} should have been executed now, but Shared Object id: {}, version: {} is absent", digest, *id, *version);
-                    })
+
+
+                    match self.get_object_by_key(id, *version)? {
+                        Some(obj) => result.push(obj),
+                        None => {
+                            // If the object was deleted by a concurrently certified tx then return this separately
+                            if self.shared_object_deleted(id, (*version).into(), epoch_store.committee().epoch)? {
+                                deleted_shared_objects.push((*id, *version));
+                            } else {
+                                panic!("All dependencies of tx {:?} should have been executed now, but Shared Object id: {}, version: {} is absent", digest, *id, *version);
+                            }
+                        }
+                    };
+
                 }
-                InputObjectKind::MovePackage(id) => self.get_object(id)?.unwrap_or_else(|| {
+                InputObjectKind::MovePackage(id) => result.push(self.get_object(id)?.unwrap_or_else(|| {
                     panic!("All dependencies of tx {:?} should have been executed now, but Move Package id: {} is absent", digest, id);
-                }),
+                })),
                 InputObjectKind::ImmOrOwnedMoveObject(objref) => {
-                    self.get_object_by_key(&objref.0, objref.1)?.unwrap_or_else(|| {
+                    result.push(self.get_object_by_key(&objref.0, objref.1)?.unwrap_or_else(|| {
                         panic!("All dependencies of tx {:?} should have been executed now, but Immutable or Owned Object id: {}, version: {} is absent", digest, objref.0, objref.1);
-                    })
+                    }))
                 }
             };
-            result.push(obj);
         }
-        Ok(result)
+        Ok((result, deleted_shared_objects))
     }
 
     // Methods to mutate the store
@@ -1028,7 +1070,7 @@ impl AuthorityStore {
         write_batch: &mut DBBatch,
         inner_temporary_store: InnerTemporaryStore,
         _transaction: &VerifiedTransaction,
-        _epoch_id: EpochId,
+        epoch_id: EpochId,
     ) -> SuiResult {
         let InnerTemporaryStore {
             objects,
@@ -1049,6 +1091,27 @@ impl AuthorityStore {
             .filter(|(id, _, _)| objects.get(id).unwrap().is_address_owned())
             .cloned()
             .collect();
+
+        // get shared deleted objects and write them to the object marker table
+        write_batch.insert_batch(
+            &self.perpetual_tables.object_per_epoch_marker_table,
+            deleted
+                .iter()
+                .filter(|(object_id, _)| {
+                    let object = objects.get(object_id).unwrap();
+                    object.is_shared()
+                })
+                .map(|(object_id, (version, _))| {
+                    (
+                        (
+                            epoch_id,
+                            ObjectKey(*object_id, *version),
+                            SharedObjectDeleted,
+                        ),
+                        (),
+                    )
+                }),
+        )?;
 
         write_batch.insert_batch(
             &self.perpetual_tables.objects,

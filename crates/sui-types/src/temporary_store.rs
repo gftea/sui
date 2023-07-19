@@ -41,6 +41,7 @@ use sui_protocol_config::ProtocolConfig;
 pub type WrittenObjects = BTreeMap<ObjectID, (ObjectRef, Object, WriteKind)>;
 pub type ObjectMap = BTreeMap<ObjectID, Object>;
 pub type TxCoins = (ObjectMap, WrittenObjects);
+pub type DeletedSharedObjects = Vec<(ObjectID, SequenceNumber)>;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -186,6 +187,8 @@ pub struct TemporaryStore<'backing> {
 
     // Every object that was read from store during exec
     runtime_read_objects: RwLock<BTreeMap<ObjectID, Object>>,
+    // if this is populated the transaction execution will not run
+    formerly_deleted_shared_objects: DeletedSharedObjects,
 }
 
 impl<'backing> TemporaryStore<'backing> {
@@ -212,7 +215,16 @@ impl<'backing> TemporaryStore<'backing> {
             protocol_config: protocol_config.clone(),
             loaded_child_objects: BTreeMap::new(),
             runtime_read_objects: RwLock::new(BTreeMap::new()),
+            formerly_deleted_shared_objects: Vec::new(),
         }
+    }
+
+    /// Add any found deleted shared object to the Temporary Store
+    pub fn update_formerly_deleted_shared_objects(
+        &mut self,
+        deleted_shared_objects: DeletedSharedObjects,
+    ) {
+        self.formerly_deleted_shared_objects = deleted_shared_objects;
     }
 
     /// WARNING! Should only be used for dry run and dev inspect!
@@ -242,6 +254,7 @@ impl<'backing> TemporaryStore<'backing> {
             protocol_config: protocol_config.clone(),
             loaded_child_objects: BTreeMap::new(),
             runtime_read_objects: RwLock::new(BTreeMap::new()),
+            formerly_deleted_shared_objects: Vec::new(),
         }
     }
 
@@ -363,6 +376,10 @@ impl<'backing> TemporaryStore<'backing> {
                 modified_at_versions.push((*id, version));
             }
         });
+
+        self.formerly_deleted_shared_objects
+            .iter_mut()
+            .for_each(|obj| modified_at_versions.push(*obj));
 
         let protocol_version = self.protocol_config.version;
         let inner = self.into_inner();

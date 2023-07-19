@@ -199,6 +199,66 @@ pub fn execute_transaction_to_effects<Mode: ExecutionMode>(
     (inner, effects, execution_result)
 }
 
+#[instrument(
+    name = "commit_transaction_without_execution",
+    level = "debug",
+    skip_all
+)]
+pub fn commit_transaction_without_execution<Mode: ExecutionMode>(
+    shared_object_refs: Vec<ObjectRef>,
+    mut temporary_store: TemporaryStore<'_>,
+    transaction_kind: TransactionKind,
+    transaction_signer: SuiAddress,
+    gas_charger: &mut GasCharger,
+    transaction_digest: TransactionDigest,
+    mut transaction_dependencies: BTreeSet<TransactionDigest>,
+    epoch_id: &EpochId,
+    enable_expensive_checks: bool,
+) -> (
+    InnerTemporaryStore,
+    TransactionEffects,
+    Result<Mode::ExecutionResults, ExecutionError>,
+) {
+    let error = ExecutionError::new(ExecutionErrorKind::CertificateDenied, None);
+    let (f_status, command) = error.to_execution_status();
+    let status = ExecutionStatus::new_failure(f_status, command);
+    let mut execution_result = Err(error);
+
+    gas_charger.smash_gas(&mut temporary_store);
+    let gas_cost_summary = gas_charger.charge_gas(&mut temporary_store, &mut execution_result);
+
+    #[skip_checked_arithmetic]
+    trace!(
+        tx_digest = ?transaction_digest,
+        computation_gas_cost = gas_cost_summary.computation_cost,
+        storage_gas_cost = gas_cost_summary.storage_cost,
+        storage_gas_rebate = gas_cost_summary.storage_rebate,
+        "Finished execution of transaction with status {:?}",
+        status
+    );
+
+    // Remove from dependencies the generic hash
+    transaction_dependencies.remove(&TransactionDigest::genesis());
+
+    let is_epoch_change = matches!(transaction_kind, TransactionKind::ChangeEpoch(_));
+    if enable_expensive_checks && !Mode::allow_arbitrary_function_calls() {
+        temporary_store
+            .check_ownership_invariants(&transaction_signer, gas_charger, is_epoch_change)
+            .unwrap()
+    } // else, in dev inspect mode and anything goes--don't check
+
+    let (inner, effects) = temporary_store.to_effects(
+        shared_object_refs,
+        &transaction_digest,
+        transaction_dependencies.into_iter().collect(),
+        gas_cost_summary,
+        status,
+        gas_charger,
+        *epoch_id,
+    );
+    (inner, effects, execution_result)
+}
+
 #[instrument(name = "tx_execute", level = "debug", skip_all)]
 fn execute_transaction<Mode: ExecutionMode>(
     temporary_store: &mut TemporaryStore<'_>,
@@ -270,7 +330,6 @@ fn execute_transaction<Mode: ExecutionMode>(
 
         execution_result
     });
-
     let cost_summary = gas_charger.charge_gas(temporary_store, &mut result);
 
     if let Err(e) = run_conservation_checks::<Mode>(
@@ -388,7 +447,6 @@ fn check_meter_limit(
             "Transaction effects are too large",
         )),
     }
-
 }
 
 #[instrument(name = "check_written_objects_limit", level = "debug", skip_all)]
@@ -804,6 +862,5 @@ fn setup_consensus_commit(
         gas_charger,
         pt,
     )
-
-    }
+}
 }

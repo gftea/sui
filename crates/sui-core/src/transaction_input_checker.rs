@@ -13,6 +13,7 @@ use sui_types::base_types::ObjectRef;
 use sui_types::error::{UserInputError, UserInputResult};
 use sui_types::executable_transaction::VerifiedExecutableTransaction;
 use sui_types::metrics::BytecodeVerifierMetrics;
+use sui_types::temporary_store::DeletedSharedObjects;
 use sui_types::transaction::{
     InputObjectKind, InputObjects, TransactionData, TransactionDataAPI, TransactionKind,
     VersionedProtocolMessage,
@@ -145,7 +146,7 @@ pub async fn check_certificate_input(
     store: &AuthorityStore,
     epoch_store: &AuthorityPerEpochStore,
     cert: &VerifiedExecutableTransaction,
-) -> SuiResult<(SuiGasStatus, InputObjects)> {
+) -> SuiResult<(SuiGasStatus, InputObjects, DeletedSharedObjects)> {
     let protocol_version = epoch_store.protocol_version();
 
     // This should not happen - validators should not have signed the txn in the first place.
@@ -161,17 +162,17 @@ pub async fn check_certificate_input(
 
     let tx_data = &cert.data().intent_message().value;
     let input_object_kinds = tx_data.input_objects()?;
-    let input_object_data = if tx_data.is_change_epoch_tx() {
+    let (input_object_data, deleted_shared_objects) = if tx_data.is_change_epoch_tx() {
         // When changing the epoch, we update a the system object, which is shared, without going
         // through sequencing, so we must bypass the sequence checks here.
-        store.check_input_objects(&input_object_kinds, epoch_store.protocol_config())?
+        (store.check_input_objects(&input_object_kinds, epoch_store.protocol_config())?, vec![])
     } else {
         store.check_sequenced_input_objects(cert.digest(), &input_object_kinds, epoch_store)?
     };
     let gas_status =
         get_gas_status(&input_object_data, tx_data.gas(), epoch_store, tx_data).await?;
     let input_objects = check_objects(tx_data, input_object_kinds, input_object_data)?;
-    Ok((gas_status, input_objects))
+    Ok((gas_status, input_objects, deleted_shared_objects))
 }
 
 /// Check transaction gas data/info and gas coins consistency.
