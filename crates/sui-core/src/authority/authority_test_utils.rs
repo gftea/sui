@@ -6,6 +6,7 @@ use crate::checkpoints::CheckpointServiceNoop;
 use crate::consensus_handler::SequencedConsensusTransaction;
 use fastcrypto::hash::MultisetHash;
 use fastcrypto::traits::KeyPair;
+use futures::task::Spawn;
 use move_core_types::account_address::AccountAddress;
 use move_symbol_pool::Symbol;
 use sui_move_build::{BuildConfig, CompiledPackage};
@@ -275,6 +276,53 @@ pub fn init_certified_transaction(
     .unwrap()
     .verify(epoch_store.committee())
     .unwrap()
+}
+
+pub async fn certify_shared_obj_transaction_no_execution(
+    authority: &AuthorityState,
+    transaction: Transaction,
+) -> Result<VerifiedCertificate, SuiError> {
+    let epoch_store = authority.load_epoch_store_one_call_per_task();
+    let transaction = authority.verify_transaction(transaction).unwrap();
+    let response = authority
+        .handle_transaction(&epoch_store, transaction.clone())
+        .await?;
+    let vote = response.status.into_signed_for_testing();
+
+    // Collect signatures from a quorum of authorities
+    let committee = authority.clone_committee_for_testing();
+    let certificate =
+        CertifiedTransaction::new(transaction.into_message(), vec![vote.clone()], &committee)
+            .unwrap()
+            .verify(&committee)
+            .unwrap();
+
+    send_consensus_no_execution(authority, &certificate).await;
+
+    Ok(certificate)
+}
+
+pub async fn execute_sequenced_certificate_to_effects(
+    authority: &AuthorityState,
+    certificate: VerifiedCertificate,
+) -> Result<
+    (
+        CertifiedTransaction,
+        TransactionEffects,
+        Option<ExecutionError>,
+    ),
+    SuiError,
+> {
+    authority
+        .enqueue_certificates_for_execution(
+            vec![certificate.clone()],
+            &authority.epoch_store_for_testing(),
+        )
+        .unwrap();
+
+    let (result, execution_error_opt) = authority.try_execute_for_test(&certificate).await?;
+    let effects = result.inner().data().clone();
+    Ok((certificate.into_inner(), effects, execution_error_opt))
 }
 
 pub async fn send_consensus(authority: &AuthorityState, cert: &VerifiedCertificate) {
