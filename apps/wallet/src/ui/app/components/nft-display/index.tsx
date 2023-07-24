@@ -7,6 +7,7 @@ import { cva, cx } from 'class-variance-authority';
 
 import { Kiosk } from './Kiosk';
 import { useResolveVideo } from '../../hooks/useResolveVideo';
+import { Text } from '../../shared/text';
 import { Heading } from '_app/shared/heading';
 import Loading from '_components/loading';
 import { NftImage, type NftImageProps } from '_components/nft-display/NftImage';
@@ -14,7 +15,7 @@ import { useGetNFTMeta, useFileExtensionType } from '_hooks';
 
 import type { VariantProps } from 'class-variance-authority';
 
-const nftDisplayCardStyles = cva('flex flex-nowrap items-center h-full', {
+const nftDisplayCardStyles = cva('flex flex-nowrap items-center h-full relative', {
 	variants: {
 		animateHover: {
 			true: 'group',
@@ -102,17 +103,23 @@ export function NFTDisplayCard({
 						</div>
 					</div>
 				)}
-				{showLabel && !wideView && (
-					<div
-						className={cx(
-							'flex-1 text-steel-dark truncate overflow-hidden max-w-full',
-							animateHover ? 'group-hover:text-black duration-200 ease-ease-in-out-cubic' : '',
-							orientation === 'horizontal' ? 'ml-2' : 'mt-2',
-						)}
-					>
-						{isOwnerToken ? 'Kiosk' : nftName}
+				"
+				{orientation === 'horizontal' ? (
+					<div className="flex-1 text-steel-dark truncate overflow-hidden max-w-full ml-2">
+						{nftName}
 					</div>
-				)}
+				) : !isOwnerToken ? (
+					<div className="absolute bottom-2 w-full px-2">
+						<div>test</div>
+						{/* <div className="flex w-10/12 overflow-hidden transition-opacity group-hover:opacity-100 opacity-100 duration-100 ease-ease-in-out-cubic">
+							<div className="px-2 py-1 bg-white/90 rounded-lg mt-0.5 absolute bottom-2 left-1/2 -translate-x-1/2">
+								<Text variant="bodySmall" mono color="steel-darker" truncate>
+									{nftName}
+								</Text>
+							</div>
+						</div> */}
+					</div>
+				) : null}
 			</Loading>
 		</div>
 	);
