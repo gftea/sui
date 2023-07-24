@@ -97,7 +97,7 @@ pub struct SignatureVerifier {
     /// don't want to pass a reference to the map to the verify method, since that would lead to a
     /// lengthy critical section. Instead, we use an immutable data structure which can be cloned
     /// very cheaply.
-    oauth_provider_jwk: RwLock<ImHashMap<String, OAuthProviderContent>>,
+    oauth_provider_jwk: RwLock<ImHashMap<(String, String), OAuthProviderContent>>,
 
     queue: Mutex<CertBuffer>,
     pub metrics: Arc<SignatureVerifierMetrics>,

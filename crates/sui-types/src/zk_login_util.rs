@@ -1,12 +1,10 @@
 // Copyright (c) 2021, Facebook, Inc. and its affiliates
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-use crate::error::{SuiError, SuiResult};
 use fastcrypto_zkp::bn254::zk_login::OAuthProvider;
 use once_cell::sync::Lazy;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 // Used in tests or anywhere that fetching up to date JWKs is not possible.
 pub const DEFAULT_JWK_BYTES: &[u8] = r#"{
@@ -15,9 +13,9 @@ pub const DEFAULT_JWK_BYTES: &[u8] = r#"{
           "kty": "RSA",
           "e": "AQAB",
           "alg": "RS256",
-          "kid": "2d9a5ef5b12623c91671a7093cb323333cd07d09",
+          "kid": "c9afda3682ebf09eb3055c1c4bd39b751fbf8195",
           "use": "sig",
-          "n": "0NDRXWtH6_HnmuSuTAisgYVZ3Z67PQjHbRFz4XNYuD95BKx0wQr0GWOi_UCGLfI0col3i6J3_AF-b1YrTFTMEr_bL8CYDdK2CYLcGUzc5bLRDAySsqnKdlhWkneqfFdr3J66mHu11KUaIIRWiLsCkR9QFF-8o2PtZzv3F-3Uh7L4q7i_Evs1s7SJlO0OAnI4ew4rP2HbRaO0Q2zK0DL_d1eoAC72apQuEzz-2aXfQ-QYSTlVK74McBhP1MRtgD6zGF2lwg4uhgb55fDDQQh0VHWQSxwbvAL0Oox69zzpkFgpjJAJUqaxegzETU1jf3iKs1vyFIB0C4N-Jr__zwLQZw=="
+          "n": "whYOFK2Ocbbpb_zVypi9SeKiNUqKQH0zTKN1-6fpCTu6ZalGI82s7XK3tan4dJt90ptUPKD2zvxqTzFNfx4HHHsrYCf2-FMLn1VTJfQazA2BvJqAwcpW1bqRUEty8tS_Yv4hRvWfQPcc2Gc3-_fQOOW57zVy-rNoJc744kb30NjQxdGp03J2S3GLQu7oKtSDDPooQHD38PEMNnITf0pj-KgDPjymkMGoJlO3aKppsjfbt_AH6GGdRghYRLOUwQU-h-ofWHR3lbYiKtXPn5dN24kiHy61e3VAQ9_YAZlwXC_99GGtw_NpghFAuM4P1JDn0DppJldy3PGFC0GfBCZASw"
         },
         {
           "alg": "RS256",
@@ -58,73 +56,4 @@ impl AddressParams {
             key_claim_name,
         }
     }
-}
-
-/// Struct that contains all the OAuth provider information. A list of them can
-/// be retrieved from the JWK endpoint (e.g. <https://www.googleapis.com/oauth2/v3/certs>)
-/// and published on the bulletin along with a trusted party's signature.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Hash, Serialize, Deserialize)]
-pub struct OAuthProviderContent {
-    kty: String,
-    kid: String,
-    pub e: String,
-    pub n: String,
-    alg: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Hash, Serialize, Deserialize)]
-pub struct OAuthProviderContentReader {
-    e: String,
-    n: String,
-    #[serde(rename = "use")]
-    my_use: String,
-    kid: String,
-    kty: String,
-    alg: String,
-}
-
-impl OAuthProviderContent {
-    pub fn kid(&self) -> &str {
-        &self.kid
-    }
-
-    pub fn from_reader(reader: OAuthProviderContentReader) -> Self {
-        Self {
-            kty: reader.kty,
-            kid: reader.kid,
-            e: trim(reader.e),
-            n: trim(reader.n),
-            alg: reader.alg,
-        }
-    }
-}
-
-/// Trim trailing '=' so that it is considered a valid base64 url encoding string by base64ct library.
-fn trim(str: String) -> String {
-    str.trim_end_matches(|c: char| c == '=').to_owned()
-}
-
-/// Parse the JWK bytes received from the oauth provider keys endpoint into a map from kid to
-/// OAuthProviderContent.
-pub fn parse_jwks(json_bytes: &[u8]) -> SuiResult<Vec<(String, OAuthProviderContent)>> {
-    let json_str = String::from_utf8_lossy(json_bytes);
-    let parsed_list: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&json_str);
-    if let Ok(parsed_list) = parsed_list {
-        if let Some(keys) = parsed_list["keys"].as_array() {
-            let mut ret = Vec::new();
-            for k in keys {
-                let parsed: OAuthProviderContentReader =
-                    serde_json::from_value(k.clone()).map_err(|_| SuiError::JWKRetrievalError)?;
-
-                if parsed.alg == "RS256" && parsed.my_use == "sig" && parsed.kty == "RSA" {
-                    ret.push((
-                        parsed.kid.clone(),
-                        OAuthProviderContent::from_reader(parsed),
-                    ));
-                }
-            }
-            return Ok(ret);
-        }
-    }
-    Err(SuiError::JWKRetrievalError)
 }

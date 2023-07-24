@@ -6,14 +6,13 @@ use crate::{
     crypto::{Signature, SignatureScheme, SuiSignature},
     error::{SuiError, SuiResult},
     signature::{AuthenticatorTrait, VerifyParams},
-    zk_login_util::{AddressParams, DEFAULT_WHITELIST},
+    zk_login_util::AddressParams,
 };
-use fastcrypto::rsa::Encoding as OtherEncoding;
-use fastcrypto::rsa::RSAPublicKey;
-use fastcrypto::rsa::RSASignature;
-use fastcrypto::{error::FastCryptoError, rsa::Base64UrlUnpadded, traits::ToFromBytes};
-use fastcrypto_zkp::bn254::zk_login::verify_zk_login_proof_with_fixed_vk;
-use fastcrypto_zkp::bn254::zk_login::{is_claim_supported, AuxInputs, PublicInputs, ZkLoginProof};
+use fastcrypto::{error::FastCryptoError, traits::ToFromBytes};
+use fastcrypto_zkp::bn254::{
+    zk_login::{AuxInputs, PublicInputs, ZkLoginProof},
+    zk_login_api::verify_zk_login,
+};
 use once_cell::sync::OnceCell;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -62,7 +61,7 @@ impl ZkLoginAuthenticator {
     pub fn get_address_params(&self) -> AddressParams {
         AddressParams::new(
             self.aux_inputs.get_iss().to_string(),
-            self.aux_inputs.get_claim_name().to_string(),
+            self.aux_inputs.get_key_claim_name().to_string(),
         )
     }
 }
@@ -108,89 +107,11 @@ impl AuthenticatorTrait for ZkLoginAuthenticator {
     where
         T: Serialize,
     {
-        // Verify the author of the transaction is indeed computed from address seed,
-        // iss and key claim name.
-        if author != self.into() {
-            return Err(SuiError::InvalidAddress);
-        }
-        let aux_inputs = &self.aux_inputs;
-
-        if !is_claim_supported(aux_inputs.get_claim_name()) {
-            return Err(SuiError::InvalidSignature {
-                error: "Unsupported claim".to_string(),
-            });
-        }
-
-        // Calculates the hash of all inputs equals to the one in public inputs.
-        if aux_inputs
-            .calculate_all_inputs_hash()
-            .map_err(|_| SuiError::InvalidSignature {
-                error: "Fail to caculate hash".to_string(),
-            })?
-            != self.public_inputs.get_all_inputs_hash()
-        {
-            return Err(SuiError::InvalidSignature {
-                error: "Invalid all inputs hash".to_string(),
-            });
-        }
-
-        // Parse JWT signature from aux inputs.
-        let sig = RSASignature::from_bytes(&aux_inputs.get_jwt_signature().map_err(|_| {
-            SuiError::InvalidSignature {
-                error: "Invalid base64url".to_string(),
-            }
-        })?)
-        .map_err(|_| SuiError::InvalidSignature {
-            error: "Invalid JWT signature".to_string(),
-        })?;
-
-        let Some(selected) = aux_verify_data.oauth_provider_jwks.get(aux_inputs.get_kid()) else {
-            return Err(SuiError::JWKRetrievalError);
-        };
-
-        // Verify the JWT signature against one of OAuth provider public keys in the bulletin.
-        // Since more than one JWKs are available in the bulletin, iterate and find the one with
-        // matching kid, iss and verify the signature against it.
-        if !DEFAULT_WHITELIST
-            .get(aux_inputs.get_iss())
-            .unwrap()
-            .contains(&aux_inputs.get_client_id())
-        {
-            return Err(SuiError::InvalidSignature {
-                error: "Client id not in whitelist".to_string(),
-            });
-        }
-
-        // TODO(joyqvq): cache RSAPublicKey and avoid parsing every time.
-        let pk = RSAPublicKey::from_raw_components(
-            &Base64UrlUnpadded::decode_vec(&selected.n).map_err(|_| {
-                SuiError::InvalidSignature {
-                    error: "Invalid OAuth provider pubkey n".to_string(),
-                }
-            })?,
-            &Base64UrlUnpadded::decode_vec(&selected.e).map_err(|_| {
-                SuiError::InvalidSignature {
-                    error: "Invalid OAuth provider pubkey e".to_string(),
-                }
-            })?,
-        )
-        .map_err(|_| SuiError::InvalidSignature {
-            error: "Invalid RSA raw components".to_string(),
-        })?;
-
-        pk.verify_prehash(&self.aux_inputs.get_jwt_hash(), &sig)
-            .map_err(|_| SuiError::InvalidSignature {
-                error: "JWT signature verify failed".to_string(),
-            })?;
-
-        // Ensure the ephemeral public key in the aux inputs matches the one in the
-        // user signature.
-        // TODO(joyqvq): possibly remove eph_pub_key from aux_inputs.
-        if self.aux_inputs.get_eph_pub_key() != self.user_signature.public_key_bytes() {
-            return Err(SuiError::InvalidSignature {
-                error: "Invalid ephemeral public_key".to_string(),
-            });
-        }
+        // // Verify the author of the transaction is indeed computed from address seed,
+        // // iss and key claim name.
+        // if author != self.into() {
+        //     return Err(SuiError::InvalidAddress);
+        // }
 
         // Verify the user signature over the intent message of the transaction data.
         if self
@@ -202,15 +123,33 @@ impl AuthenticatorTrait for ZkLoginAuthenticator {
                 error: "User signature verify failed".to_string(),
             });
         }
+        verify_zk_login(
+            &self.proof,
+            &self.public_inputs,
+            &self.aux_inputs,
+            &aux_verify_data.oauth_provider_jwks,
+        )
+        .map_err(|e| SuiError::InvalidSignature {
+            error: e.to_string(),
+        })
 
-        // Finally, verify the Groth16 proof against public inputs and proof points.
-        // Verifying key is pinned in fastcrypto.
-        match verify_zk_login_proof_with_fixed_vk(&self.proof, &self.public_inputs) {
-            Ok(true) => Ok(()),
-            Ok(false) | Err(_) => Err(SuiError::InvalidSignature {
-                error: "Groth16 proof verify failed".to_string(),
-            }),
-        }
+        // // Ensure the ephemeral public key in the aux inputs matches the one in the
+        // // user signature.
+        // // TODO(joyqvq): possibly remove eph_pub_key from aux_inputs.
+        // if self.aux_inputs.get_eph_pub_key() != self.user_signature.public_key_bytes() {
+        //     return Err(SuiError::InvalidSignature {
+        //         error: "Invalid ephemeral public_key".to_string(),
+        //     });
+        // }
+
+        // // Finally, verify the Groth16 proof against public inputs and proof points.
+        // // Verifying key is pinned in fastcrypto.
+        // match verify_zk_login_proof_with_fixed_vk(&self.proof, &self.public_inputs) {
+        //     Ok(true) => Ok(()),
+        //     Ok(false) | Err(_) => Err(SuiError::InvalidSignature {
+        //         error: "Groth16 proof verify failed".to_string(),
+        //     }),
+        // }
     }
 }
 

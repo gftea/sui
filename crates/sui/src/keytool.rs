@@ -11,9 +11,7 @@ use fastcrypto::traits::{KeyPair, ToFromBytes};
 use fastcrypto_zkp::bn254::api::Bn254Fr;
 use fastcrypto_zkp::bn254::poseidon::PoseidonWrapper;
 use fastcrypto_zkp::bn254::zk_login::OAuthProvider;
-use fastcrypto_zkp::bn254::zk_login::{
-    big_int_str_to_bytes, AuxInputs, PublicInputs, SupportedKeyClaim, ZkLoginProof,
-};
+use fastcrypto_zkp::bn254::zk_login::{AuxInputs, PublicInputs, SupportedKeyClaim, ZkLoginProof};
 use num_bigint::{BigInt, Sign};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
