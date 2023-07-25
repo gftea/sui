@@ -45,8 +45,7 @@ export function useGetNFTs(address?: string | null) {
 			if (hasDisplayData(curr) || isKioskOwnerToken(curr))
 				acc.visual.push(curr.data as SuiObjectData);
 
-			if (!hasDisplayData(curr) && !isKioskOwnerToken(curr))
-				acc.other.push(curr.data as SuiObjectData);
+			if (!hasDisplayData(curr)) acc.other.push(curr.data as SuiObjectData);
 			return acc;
 		}, ownedAssets);
 

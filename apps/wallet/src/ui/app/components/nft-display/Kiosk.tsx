@@ -17,7 +17,8 @@ type KioskProps = {
 // (clip-path is used instead of overflow-hidden as it can be animated)
 const clipPath = '[clip-path:inset(0_0_7px_0_round_12px)] group-hover:[clip-path:inset(0_0_0_0)]';
 
-const timing = 'transition-all duration-300 ease-[cubic-bezier(0.68,-0.55,0.265,1.55)]';
+const timing =
+	'transition-all group-hover:delay-[0.25s] duration-300 ease-[cubic-bezier(0.68,-0.55,0.265,1.55)]';
 const cardStyles = [
 	`scale-100 group-hover:scale-95 object-cover origin-bottom z-30 group-hover:translate-y-0 translate-y-2 group-hover:shadow-md`,
 	`scale-[0.95] group-hover:-rotate-6 group-hover:-translate-x-5 group-hover:-translate-y-2 z-20 translate-y-0 group-hover:shadow-md`,
