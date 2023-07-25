@@ -6,7 +6,7 @@ import { Check12, EyeClose16 } from '@mysten/icons';
 import { get, set } from 'idb-keyval';
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 
 import AssetsOptionsMenu from './AssetsOptionsMenu';
 import { Link as InlineLink } from '../../../shared/Link';
@@ -14,13 +14,15 @@ import { Text } from '../../../shared/text';
 import { useActiveAddress } from '_app/hooks/useActiveAddress';
 import Alert from '_components/alert';
 import { ErrorBoundary } from '_components/error-boundary';
+import FiltersPortal from '_components/filters-tags';
 import Loading from '_components/loading';
 import LoadingSpinner from '_components/loading/LoadingIndicator';
 import { NFTDisplayCard } from '_components/nft-display';
 import { ampli } from '_src/shared/analytics/ampli';
-import { useGetNFTs } from '_src/ui/app/hooks/useGetNFTs';
+import { type DisplayTypes, useGetNFTs } from '_src/ui/app/hooks/useGetNFTs';
 import { Button } from '_src/ui/app/shared/ButtonUI';
 import PageTitle from '_src/ui/app/shared/PageTitle';
+import { setToSessionStorage } from '_src/background/storage-utils';
 
 const HIDDEN_ASSET_IDS = 'hidden-asset-ids';
 
@@ -143,9 +145,14 @@ function NftsPage() {
 		hideAssetId(objectId);
 	};
 
+	const handleFilterChange = async (tag: any) => {
+		await setToSessionStorage<string>('NFTS_PAGE_NAVIGATION', tag.link);
+	};
+	const { filterType } = useParams();
 	const filteredNFTs = useMemo(() => {
-		return ownedAssets?.filter((nft) => !internalHiddenAssetIds.includes(nft.objectId));
-	}, [ownedAssets, internalHiddenAssetIds]);
+		if (!filterType) return ownedAssets?.visual;
+		return ownedAssets?.[filterType as DisplayTypes] ?? [];
+	}, [ownedAssets, filterType]);
 
 	if (isInitialLoading) {
 		return (
@@ -155,9 +162,16 @@ function NftsPage() {
 		);
 	}
 
+	const tags = [
+		{ name: 'Visual Assets', link: 'nfts' },
+		{ name: 'Everything Else', link: 'nfts/other' },
+	];
+
 	return (
 		<div className="flex flex-1 flex-col flex-nowrap items-center gap-4">
 			<PageTitle title="Assets" after={<AssetsOptionsMenu />} />
+			<FiltersPortal firstLastMargin tags={tags} callback={handleFilterChange} />
+
 			<Loading loading={isLoading}>
 				{isError ? (
 					<Alert>

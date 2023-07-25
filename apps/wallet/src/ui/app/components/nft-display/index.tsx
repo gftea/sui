@@ -54,6 +54,7 @@ export function NFTDisplayCard({
 	orientation,
 	isLocked,
 }: NFTDisplayCardProps) {
+	console.log(objectId);
 	const { data: objectData } = useGetObject(objectId);
 	const { data: nftMeta, isLoading } = useGetNFTMeta(objectId);
 	const nftName = nftMeta?.name || formatAddress(objectId);
@@ -62,7 +63,8 @@ export function NFTDisplayCard({
 	const fileExtensionType = useFileExtensionType(nftImageUrl);
 	const isOwnerToken = isKioskOwnerToken(objectData);
 	const shouldShowLabel = !wideView && orientation !== 'horizontal';
-
+	console.log(objectData?.data);
+	console.log(isOwnerToken);
 	return (
 		<div className={nftDisplayCardStyles({ animateHover, wideView, orientation })}>
 			<Loading loading={isLoading}>

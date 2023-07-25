@@ -4,6 +4,17 @@
 import { hasDisplayData, isKioskOwnerToken, useGetOwnedObjects } from '@mysten/core';
 import { type SuiObjectData } from '@mysten/sui.js/client';
 
+type OwnedAssets = {
+	visual: SuiObjectData[];
+	other: SuiObjectData[];
+	ownerCaps: SuiObjectData[];
+};
+
+export enum DisplayTypes {
+	visual = 'visual',
+	other = 'other',
+}
+
 export function useGetNFTs(address?: string | null) {
 	const {
 		data,
@@ -22,15 +33,25 @@ export function useGetNFTs(address?: string | null) {
 		50,
 	);
 
-	const ownedAssets =
-		data?.pages
-			.flatMap((page) => page.data)
-			.sort((object) => (hasDisplayData(object) ? -1 : 1))
-			.sort((object) => (isKioskOwnerToken(object) ? -1 : 1))
-			.map(({ data }) => data as SuiObjectData) ?? [];
+	const ownedAssets: OwnedAssets = {
+		visual: [],
+		other: [],
+		ownerCaps: [],
+	};
+
+	const assets = data?.pages
+		.flatMap((page) => page.data)
+		.reduce((acc, curr) => {
+			if (hasDisplayData(curr) || isKioskOwnerToken(curr))
+				acc.visual.push(curr.data as SuiObjectData);
+
+			if (!hasDisplayData(curr) && !isKioskOwnerToken(curr))
+				acc.other.push(curr.data as SuiObjectData);
+			return acc;
+		}, ownedAssets);
 
 	return {
-		data: ownedAssets,
+		data: assets,
 		isInitialLoading,
 		hasNextPage,
 		isFetchingNextPage,
