@@ -194,7 +194,7 @@ module sui::kiosk_extension {
     /// and the type of the item must be in the list of allowed types.
     ///
     /// To prevent non-tradable items from being placed into `Kiosk` the method
-    /// requires a `TransferPolicy` for the placed type.
+    /// requires a `TransferPolicy` for the placed type to exist.
     public fun place<Ext: drop, T: key + store>(
         _ext: Ext, self: &mut Kiosk, item: T, _policy: &TransferPolicy<T>
     ) {
