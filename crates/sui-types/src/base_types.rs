@@ -611,7 +611,7 @@ impl From<&ZkLoginAuthenticator> for SuiAddress {
         hasher.update([SignatureScheme::ZkLoginAuthenticator.flag()]);
         // unwrap is safe here
         hasher.update(bcs::to_bytes(&authenticator.get_address_params()).unwrap());
-
+        //addr = Blake2b_256(zklogin_flag, L_iss, iss, L_aud, aud, addr_seed)
         // hasher.update(big_int_str_to_bytes(authenticator.get_address_seed()));
         SuiAddress(hasher.finalize().digest)
     }

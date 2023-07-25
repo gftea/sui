@@ -1,10 +1,7 @@
 // Copyright (c) 2021, Facebook, Inc. and its affiliates
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
-use fastcrypto_zkp::bn254::zk_login::OAuthProvider;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // Used in tests or anywhere that fetching up to date JWKs is not possible.
 pub const DEFAULT_JWK_BYTES: &[u8] = r#"{
@@ -27,20 +24,6 @@ pub const DEFAULT_JWK_BYTES: &[u8] = r#"{
         }
       ]
   }"#.as_bytes();
-
-/// A whitelist of client_ids (i.e. the value of "aud" in cliams) for each provider
-pub static DEFAULT_WHITELIST: Lazy<HashMap<&str, Vec<&str>>> = Lazy::new(|| {
-    let mut map = HashMap::new();
-    map.insert(
-        OAuthProvider::Google.get_config().0,
-        vec!["946731352276-pk5glcg8cqo38ndb39h7j093fpsphusu.apps.googleusercontent.com"],
-    );
-    map.insert(
-        OAuthProvider::Twitch.get_config().0,
-        vec!["d31icql6l8xzpa7ef31ztxyss46ock"],
-    );
-    map
-});
 
 /// Parameters for generating an address.
 #[derive(Debug, Serialize, Deserialize)]

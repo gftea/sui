@@ -123,33 +123,18 @@ impl AuthenticatorTrait for ZkLoginAuthenticator {
                 error: "User signature verify failed".to_string(),
             });
         }
+        println!("fok={:?}", &self.user_signature.public_key_bytes());
+
         verify_zk_login(
             &self.proof,
             &self.public_inputs,
             &self.aux_inputs,
+            &self.user_signature.public_key_bytes(),
             &aux_verify_data.oauth_provider_jwks,
         )
         .map_err(|e| SuiError::InvalidSignature {
             error: e.to_string(),
         })
-
-        // // Ensure the ephemeral public key in the aux inputs matches the one in the
-        // // user signature.
-        // // TODO(joyqvq): possibly remove eph_pub_key from aux_inputs.
-        // if self.aux_inputs.get_eph_pub_key() != self.user_signature.public_key_bytes() {
-        //     return Err(SuiError::InvalidSignature {
-        //         error: "Invalid ephemeral public_key".to_string(),
-        //     });
-        // }
-
-        // // Finally, verify the Groth16 proof against public inputs and proof points.
-        // // Verifying key is pinned in fastcrypto.
-        // match verify_zk_login_proof_with_fixed_vk(&self.proof, &self.public_inputs) {
-        //     Ok(true) => Ok(()),
-        //     Ok(false) | Err(_) => Err(SuiError::InvalidSignature {
-        //         error: "Groth16 proof verify failed".to_string(),
-        //     }),
-        // }
     }
 }
 
