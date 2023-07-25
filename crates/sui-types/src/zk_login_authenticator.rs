@@ -61,7 +61,7 @@ impl ZkLoginAuthenticator {
     pub fn get_address_params(&self) -> AddressParams {
         AddressParams::new(
             self.aux_inputs.get_iss().to_string(),
-            self.aux_inputs.get_key_claim_name().to_string(),
+            self.aux_inputs.get_aud().to_string(),
         )
     }
 }
@@ -107,11 +107,11 @@ impl AuthenticatorTrait for ZkLoginAuthenticator {
     where
         T: Serialize,
     {
-        // // Verify the author of the transaction is indeed computed from address seed,
-        // // iss and key claim name.
-        // if author != self.into() {
-        //     return Err(SuiError::InvalidAddress);
-        // }
+        // Verify the author of the transaction is indeed computed from address seed,
+        // iss and key claim name.
+        if author != self.into() {
+            return Err(SuiError::InvalidAddress);
+        }
 
         // Verify the user signature over the intent message of the transaction data.
         if self
@@ -129,7 +129,7 @@ impl AuthenticatorTrait for ZkLoginAuthenticator {
             &self.proof,
             &self.public_inputs,
             &self.aux_inputs,
-            &self.user_signature.public_key_bytes(),
+            self.user_signature.public_key_bytes(),
             &aux_verify_data.oauth_provider_jwks,
         )
         .map_err(|e| SuiError::InvalidSignature {

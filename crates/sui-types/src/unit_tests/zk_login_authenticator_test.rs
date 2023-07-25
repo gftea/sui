@@ -32,14 +32,17 @@ fn zklogin_authenticator_scenarios() {
     );
 
     let parsed: ImHashMap<(String, String), OAuthProviderContent> =
-        parse_jwks(DEFAULT_JWK_BYTES, OAuthProvider::Google).unwrap().into_iter().collect();
+        parse_jwks(DEFAULT_JWK_BYTES, OAuthProvider::Google)
+            .unwrap()
+            .into_iter()
+            .collect();
 
     // Construct the required info required to verify a zk login authenticator
     // in authority server (i.e. epoch and default JWK).
     let aux_verify_data = VerifyParams::new(parsed.clone());
 
-    let x = authenticator
-    .verify_authenticator(&intent_msg, user_address, Some(0), &aux_verify_data);
+    let x =
+        authenticator.verify_authenticator(&intent_msg, user_address, Some(0), &aux_verify_data);
     println!("x: {:?}", x);
     // Verify passes.
     // this is failing till we use a new nonce

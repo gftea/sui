@@ -37,6 +37,7 @@ use tracing::{debug, warn};
 use tracing::{error_span, info, Instrument};
 
 use checkpoint_executor::CheckpointExecutor;
+use fastcrypto_zkp::bn254::zk_login::{parse_jwks, OAuthProvider, OAuthProviderContent};
 pub use handle::SuiNodeHandle;
 use mysten_metrics::{spawn_monitored_task, RegistryService};
 use mysten_network::server::ServerBuilder;
@@ -104,7 +105,6 @@ use sui_types::quorum_driver_types::QuorumDriverEffectsQueueResult;
 use sui_types::sui_system_state::epoch_start_sui_system_state::EpochStartSystemState;
 use sui_types::sui_system_state::epoch_start_sui_system_state::EpochStartSystemStateTrait;
 use sui_types::sui_system_state::SuiSystemStateTrait;
-use sui_types::zk_login_util::{parse_jwks, OAuthProviderContent};
 use typed_store::rocks::default_db_options;
 use typed_store::DBMetrics;
 
@@ -230,7 +230,7 @@ impl SuiNode {
     }
 
     #[cfg(not(msim))]
-    async fn fetch_jwk() -> SuiResult<Vec<(String, OAuthProviderContent)>> {
+    async fn fetch_jwk() -> SuiResult<Vec<((String, String), OAuthProviderContent)>> {
         let client = reqwest::Client::new();
         let response = client
             .get("https://www.googleapis.com/oauth2/v2/certs")
@@ -242,12 +242,15 @@ impl SuiNode {
             .await
             .map_err(|_| SuiError::JWKRetrievalError)?;
 
-        parse_jwks(&bytes)
+        parse_jwks(&bytes, OAuthProvider::Google).map_err(|_| SuiError::JWKRetrievalError)
     }
 
     #[cfg(msim)]
-    async fn fetch_jwk() -> SuiResult<Vec<(String, OAuthProviderContent)>> {
-        parse_jwks(sui_types::zk_login_util::DEFAULT_JWK_BYTES)
+    async fn fetch_jwk() -> SuiResult<Vec<((String, String), OAuthProviderContent)>> {
+        parse_jwks(
+            sui_types::zk_login_util::DEFAULT_JWK_BYTES,
+            OAuthProvider::Google,
+        )
     }
 
     pub async fn start_async(

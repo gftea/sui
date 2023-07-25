@@ -1,6 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use fastcrypto_zkp::bn254::zk_login::OAuthProviderContent;
 use futures::future::{join_all, select, Either};
 use futures::FutureExt;
 use itertools::izip;
@@ -26,7 +27,6 @@ use sui_types::transaction::{
     CertifiedTransaction, SenderSignedData, SharedInputObject, TransactionDataAPI,
     VerifiedCertificate, VerifiedSignedTransaction,
 };
-use sui_types::zk_login_util::OAuthProviderContent;
 use tracing::{debug, error, info, trace, warn};
 use typed_store::rocks::{
     default_db_options, DBBatch, DBMap, DBOptions, MetricConf, TypedStoreError,

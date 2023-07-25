@@ -28,13 +28,14 @@ use fastcrypto::encoding::{Base64, Encoding};
 use fastcrypto::hash::HashFunction;
 use fastcrypto::traits::KeyPair as KeypairTraits;
 use fastcrypto::traits::ToFromBytes;
-use fastcrypto_zkp::bn254::zk_login::{
-    AuxInputs, OAuthProvider, PublicInputs, SupportedKeyClaim, ZkLoginProof,
-};
+use fastcrypto_zkp::bn254::zk_login::{AuxInputs, OAuthProvider, PublicInputs, ZkLoginProof};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use shared_crypto::intent::{Intent, IntentMessage};
 use std::collections::BTreeMap;
+
+pub const TEST_CLIENT_ID: &str =
+    "575519204237-msop9ep45u2uo98hapqmngv8d84qdc8k.apps.googleusercontent.com";
 
 pub fn make_committee_key<R>(rand: &mut R) -> (Vec<AuthorityKeyPair>, Committee)
 where
@@ -157,6 +158,8 @@ pub fn mock_certified_checkpoint<'a>(
 }
 
 mod zk_login {
+    use fastcrypto_zkp::bn254::zk_login::big_int_str_to_bytes;
+
     use super::*;
 
     fn get_proof() -> ZkLoginProof {
@@ -187,15 +190,15 @@ mod zk_login {
     pub fn get_zklogin_user_address() -> SuiAddress {
         thread_local! {
             static USER_ADDRESS: SuiAddress = {
-                // Derive user address manually: Blake2b_256 hash of [zklogin_flag || address seed in bytes || bcs bytes of AddressParams])
+                // Derive user address manually: Blake2b_256 hash of [zklogin_flag || bcs bytes of AddressParams || address seed in bytes])
                 let mut hasher = DefaultHash::default();
                 hasher.update([SignatureScheme::ZkLoginAuthenticator.flag()]);
                 let address_params = AddressParams::new(
                     OAuthProvider::Google.get_config().0.to_owned(),
-                    SupportedKeyClaim::Sub.to_string(),
+                    TEST_CLIENT_ID.to_string(),
                 );
                 hasher.update(bcs::to_bytes(&address_params).unwrap());
-                // hasher.update(big_int_str_to_bytes(get_aux_inputs().get_address_seed()));
+                hasher.update(big_int_str_to_bytes(get_aux_inputs().get_address_seed()));
                 SuiAddress::from_bytes(hasher.finalize().digest).unwrap()
             };
         }

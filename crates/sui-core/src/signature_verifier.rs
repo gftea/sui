@@ -2,15 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use either::Either;
+use fastcrypto_zkp::bn254::zk_login::{OAuthProvider, OAuthProviderContent};
 use futures::pin_mut;
 use im::hashmap::HashMap as ImHashMap;
 use itertools::izip;
 use lru::LruCache;
+use mysten_metrics::monitored_scope;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use prometheus::{register_int_counter_with_registry, IntCounter, Registry};
 use shared_crypto::intent::Intent;
 use std::hash::Hash;
 use std::sync::Arc;
+use sui_types::digests::SenderSignedDataDigest;
+use sui_types::transaction::SenderSignedData;
 use sui_types::{
     committee::Committee,
     crypto::{AuthoritySignInfoTrait, VerificationObligation},
@@ -20,12 +24,7 @@ use sui_types::{
     messages_checkpoint::SignedCheckpointSummary,
     signature::VerifyParams,
     transaction::{CertifiedTransaction, VerifiedCertificate},
-    zk_login_util::OAuthProviderContent,
 };
-
-use mysten_metrics::monitored_scope;
-use sui_types::digests::SenderSignedDataDigest;
-use sui_types::transaction::SenderSignedData;
 use tap::TapFallible;
 use tokio::runtime::Handle;
 use tokio::{
@@ -279,13 +278,14 @@ impl SignatureVerifier {
     /// been inserted.
     pub(crate) fn insert_oauth_jwk(&self, content: &OAuthProviderContent) -> bool {
         let mut oauth_provider_jwk = self.oauth_provider_jwk.write();
-
-        if oauth_provider_jwk.contains_key(content.kid()) {
+        // TODO (joyqvq): Add other OAuth provider JWK updaters.
+        let default_iss = OAuthProvider::Google.get_config().0.to_string();
+        if oauth_provider_jwk.contains_key(&(content.kid().to_string(), default_iss.clone())) {
             return false;
         }
 
         let kid = content.kid().to_string();
-        oauth_provider_jwk.insert(kid, content.clone());
+        oauth_provider_jwk.insert((kid, default_iss), content.clone());
         true
     }
 

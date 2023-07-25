@@ -6,19 +6,24 @@ use clap::*;
 use fastcrypto::ed25519::Ed25519KeyPair;
 use fastcrypto::encoding::{decode_bytes_hex, Base64, Encoding, Hex};
 use fastcrypto::hash::HashFunction;
+use fastcrypto::rsa::Base64UrlUnpadded;
+use fastcrypto::rsa::Encoding as OtherEncoding;
 use fastcrypto::secp256k1::recoverable::Secp256k1Sig;
 use fastcrypto::traits::{KeyPair, ToFromBytes};
 use fastcrypto_zkp::bn254::api::Bn254Fr;
 use fastcrypto_zkp::bn254::poseidon::PoseidonWrapper;
+use fastcrypto_zkp::bn254::zk_login::big_int_str_to_bytes;
 use fastcrypto_zkp::bn254::zk_login::OAuthProvider;
-use fastcrypto_zkp::bn254::zk_login::{AuxInputs, PublicInputs, SupportedKeyClaim, ZkLoginProof};
+use fastcrypto_zkp::bn254::zk_login::{AuxInputs, PublicInputs, ZkLoginProof};
 use num_bigint::{BigInt, Sign};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::Rng;
+use regex::Regex;
 use rusoto_core::Region;
 use rusoto_kms::{Kms, KmsClient, SignRequest};
 use shared_crypto::intent::{Intent, IntentMessage};
 use std::fs;
+use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use sui_keys::key_derive::generate_new_key;
@@ -28,18 +33,16 @@ use sui_keys::keypair_file::{
 };
 use sui_keys::keystore::{AccountKeystore, Keystore};
 use sui_types::base_types::SuiAddress;
-use sui_types::crypto::{
-    get_authority_key_pair, get_key_pair_from_rng, EncodeDecodeBase64, SignatureScheme, SuiKeyPair,
-};
+use sui_types::crypto::{get_authority_key_pair, EncodeDecodeBase64, SignatureScheme, SuiKeyPair};
 use sui_types::crypto::{DefaultHash, PublicKey, Signature};
 use sui_types::multisig::{MultiSig, MultiSigPublicKey, ThresholdUnit, WeightUnit};
 use sui_types::multisig_legacy::{MultiSigLegacy, MultiSigPublicKeyLegacy};
 use sui_types::signature::{AuthenticatorTrait, GenericSignature, VerifyParams};
 use sui_types::transaction::TransactionData;
+use sui_types::utils::TEST_CLIENT_ID;
 use sui_types::zk_login_authenticator::ZkLoginAuthenticator;
 use sui_types::zk_login_util::AddressParams;
 use tracing::info;
-
 #[cfg(test)]
 #[path = "unit_tests/keytool_tests.rs"]
 mod keytool_tests;
@@ -630,29 +633,53 @@ impl KeyToolCommand {
             }
 
             KeyToolCommand::ZkLogInPrepare { max_epoch } => {
-                // todo: unhardcode keypair and jwt_randomness and max_epoch.
-                let kp: Ed25519KeyPair = get_key_pair_from_rng(&mut StdRng::from_seed([0; 32])).1;
-                let skp = SuiKeyPair::Ed25519(kp.copy());
-                println!("Ephemeral pubkey: {:?}", skp.public().encode_base64());
-                println!("Ephemeral keypair: {:?}", skp.encode_base64());
+                let skp = SuiKeyPair::Ed25519(Ed25519KeyPair::generate(&mut rand::thread_rng()));
+                let pk = skp.public();
+                println!(
+                    "Ephemeral pubkey (Base64 encoded flag || bytes): {:?}",
+                    pk.clone().encode_base64()
+                );
+                let bytes = pk.as_ref();
+                let kp_bigint = BigInt::from_bytes_be(Sign::Plus, bytes);
+                println!("Ephemeral pubkey (BigInt): {:?}", kp_bigint.to_string());
 
-                // Nonce is defined as the base64Url encoded of the poseidon hash of 4 inputs:
+                // Nonce is defined as the Base64Url encoded of the poseidon hash of 4 inputs:
                 // first half of eph_pubkey bytes in BigInt, second half, max_epoch, randomness.
-                let bytes = kp.public().as_ref();
                 let (first_half, second_half) = bytes.split_at(bytes.len() / 2);
                 let first_bigint = BigInt::from_bytes_be(Sign::Plus, first_half);
                 let second_bigint = BigInt::from_bytes_be(Sign::Plus, second_half);
+                println!("first_bigint: {:?}", first_bigint.to_string());
+                println!("second_bigint: {:?}", second_bigint.to_string());
 
                 let mut poseidon = PoseidonWrapper::new();
                 let first = Bn254Fr::from_str(&first_bigint.to_string()).unwrap();
                 let second = Bn254Fr::from_str(&second_bigint.to_string()).unwrap();
                 let max_epoch = Bn254Fr::from_str(max_epoch.as_str()).unwrap();
-                let jwt_randomness = Bn254Fr::from_str(
-                    "50683480294434968413708503290439057629605340925620961559740848568164438166",
-                )
-                .unwrap();
+
+                let random_bytes = rand::thread_rng().gen::<[u8; 16]>();
+                let jwt_random_bytes = BigInt::from_bytes_be(Sign::Plus, &random_bytes);
+                let jwt_randomness = Bn254Fr::from_str(&jwt_random_bytes.to_string()).unwrap();
+                println!("JWT randomness: {:?}", jwt_randomness.to_string());
+
                 let hash = poseidon.hash(vec![first, second, max_epoch, jwt_randomness])?;
-                println!("Nonce: {:?}", hash.to_string());
+                println!("hash: {:?}", hash.to_string());
+
+                let data = big_int_str_to_bytes(&hash.to_string());
+                let truncated = &data[data.len() - 20..];
+                let mut buf = vec![0; Base64UrlUnpadded::encoded_len(truncated)];
+                let nonce = Base64UrlUnpadded::encode(truncated, &mut buf).unwrap();
+                println!("Visit URL: {:?}", format!("https://accounts.google.com/o/oauth2/v2/auth?client_id=575519204237-msop9ep45u2uo98hapqmngv8d84qdc8k.apps.googleusercontent.com&response_type=id_token&redirect_uri=https://sui.io/&scope=openid&nonce={}",nonce));
+                println!("Paste the entire URL here:");
+                let full_url = read_line()?;
+                let mut parsed_token = "";
+                let re = Regex::new(r"id_token=([^&]+)").unwrap();
+                if let Some(captures) = re.captures(&full_url) {
+                    if let Some(id_token) = captures.get(1) {
+                        parsed_token = id_token.as_str();
+                    }
+                }
+                println!("Run prover with command:");
+                println!("{}", format!("npm run prove -- -p google -e {} -m {} -r {} -j {} -q wYvSKSQYKnGNV72_uVc9jbyUeTMsMbUgZPP0uVQX900To7A8a0XA3O17wuImgOG_BwGkpZrIRXF_RRYSK8IOH8N_ViTWh1vyEYSYwr_jfCpDoedJT0O6TZpBhBSmimtmO8ZBCkhZJ4w0AFNIMDPhMokbxwkEapjMA5zio_06dKfb3OBNmrwedZY86W1204-Pfma9Ih15Dm4o8SNFo5Sl0NNO4Ithvj2bbg1Bz1ydE4lMrXdSQL5C2uM9JYRJLnIjaYopBENwgf2Egc9CdVY8tr8jED-WQB6bcUBhDV6lJLZbpBlTHLkF1RlEMnIV2bDo02CryjThnz8l_-6G_7pJww==", kp_bigint.to_string(), max_epoch.to_string(), jwt_randomness.to_string(), parsed_token.to_string()));
             }
 
             KeyToolCommand::GenerateZkLoginAddress { address_seed } => {
@@ -660,7 +687,7 @@ impl KeyToolCommand {
                 hasher.update([SignatureScheme::ZkLoginAuthenticator.flag()]);
                 let address_params = AddressParams::new(
                     OAuthProvider::Google.get_config().0.to_owned(),
-                    SupportedKeyClaim::Sub.to_string(),
+                    TEST_CLIENT_ID.to_string(),
                 );
                 println!("Address params: {:?}", address_params);
                 hasher.update(bcs::to_bytes(&address_params).unwrap());
@@ -729,4 +756,11 @@ fn store_and_print_keypair(address: SuiAddress, keypair: SuiKeyPair) {
         "Address, keypair and key scheme written to {}",
         path.to_str().unwrap()
     );
+}
+
+fn read_line() -> Result<String, anyhow::Error> {
+    let mut s = String::new();
+    let _ = io::stdout().flush();
+    io::stdin().read_line(&mut s)?;
+    Ok(s.trim_end().to_string())
 }

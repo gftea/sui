@@ -29,14 +29,11 @@ pub const DEFAULT_JWK_BYTES: &[u8] = r#"{
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddressParams {
     iss: String,
-    key_claim_name: String,
+    aud: String,
 }
 
 impl AddressParams {
-    pub fn new(iss: String, key_claim_name: String) -> Self {
-        Self {
-            iss,
-            key_claim_name,
-        }
+    pub fn new(iss: String, aud: String) -> Self {
+        Self { iss, aud }
     }
 }
