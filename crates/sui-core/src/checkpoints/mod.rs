@@ -838,6 +838,7 @@ impl CheckpointBuilder {
         details: PendingCheckpointInfo,
     ) -> anyhow::Result<Vec<(CheckpointSummary, CheckpointContents)>> {
         let _scope = monitored_scope("CheckpointBuilder::create_checkpoints");
+        let last_checkpoint_scope = monitored_scope("CheckpointBuilder::last_checkpoint_new");
         let total = all_effects.len();
         let mut last_checkpoint = self.epoch_store.last_built_checkpoint_summary()?;
         if last_checkpoint.is_none() {
@@ -861,7 +862,10 @@ impl CheckpointBuilder {
             "Creating checkpoint(s) for {} transactions",
             all_effects.len(),
         );
+        drop(last_checkpoint_scope);
 
+        let get_tx_and_tx_sizes_scope =
+            monitored_scope("CheckpointBuilder::get_tx_and_tx_sizes_new");
         let all_digests: Vec<_> = all_effects
             .iter()
             .map(|effect| *effect.transaction_digest())
@@ -902,7 +906,10 @@ impl CheckpointBuilder {
                 .consensus_messages_processed_notify(transaction_keys)
                 .await?;
         }
+        drop(get_tx_and_tx_sizes_scope);
 
+        let get_user_signatures_scope =
+            monitored_scope("CheckpointBuilder::get_user_signatures_new");
         let signatures = self
             .epoch_store
             .user_signatures_for_checkpoint(&all_digests)?;
@@ -911,7 +918,10 @@ impl CheckpointBuilder {
             "Received {} checkpoint user signatures from consensus",
             signatures.len()
         );
+        drop(get_user_signatures_scope);
 
+        let get_checkpoint_chunks_scope =
+            monitored_scope("CheckpointBuilder::get_checkpoint_chunks_new");
         let chunks = self.split_checkpoint_chunks(all_effects_and_transaction_sizes, signatures)?;
         let chunks_count = chunks.len();
 
@@ -920,9 +930,13 @@ impl CheckpointBuilder {
             ?last_checkpoint_seq,
             "Creating {} checkpoints with {} transactions", chunks_count, total,
         );
+        drop(get_checkpoint_chunks_scope);
 
         let epoch = self.epoch_store.epoch();
+        let all_chunk_processing_scope =
+            monitored_scope("CheckpointBuilder::all_chunk_processing_new");
         for (index, transactions) in chunks.into_iter().enumerate() {
+            let set_timestamp_scope = monitored_scope("CheckpointBuilder::set_timestamp_new");
             let first_checkpoint_of_epoch = index == 0
                 && last_checkpoint
                     .as_ref()
@@ -945,12 +959,20 @@ impl CheckpointBuilder {
                     sequence_number,  last_checkpoint.timestamp_ms, timestamp_ms);
                 }
             }
+            drop(set_timestamp_scope);
 
+            let get_epoch_total_gas_cost_scope =
+                monitored_scope("CheckpointBuilder::get_epoch_total_gas_cost_new");
             let (mut effects, mut signatures): (Vec<_>, Vec<_>) = transactions.into_iter().unzip();
             let epoch_rolling_gas_cost_summary =
                 self.get_epoch_total_gas_cost(last_checkpoint.as_ref().map(|(_, c)| c), &effects);
+            drop(get_epoch_total_gas_cost_scope);
 
             let end_of_epoch_data = if last_checkpoint_of_epoch {
+                let _calc_end_of_epoch_scope =
+                    monitored_scope("CheckpointBuilder::calc_end_of_epoch_new");
+                let augment_epoch_last_checkpoint_scope =
+                    monitored_scope("CheckpointBuilder::augment_epoch_last_checkpoint_new");
                 let system_state_obj = self
                     .augment_epoch_last_checkpoint(
                         &epoch_rolling_gas_cost_summary,
@@ -960,9 +982,12 @@ impl CheckpointBuilder {
                         sequence_number,
                     )
                     .await?;
+                drop(augment_epoch_last_checkpoint_scope);
 
                 let committee = system_state_obj.get_current_epoch_committee().committee;
 
+                let eoe_accumulate_checkpoint_scope =
+                    monitored_scope("CheckpointBuilder::EOE_accumulate_checkpoint_new");
                 // This must happen after the call to augment_epoch_last_checkpoint,
                 // otherwise we will not capture the change_epoch tx
                 self.accumulator.accumulate_checkpoint(
@@ -970,6 +995,7 @@ impl CheckpointBuilder {
                     sequence_number,
                     self.epoch_store.clone(),
                 )?;
+                drop(eoe_accumulate_checkpoint_scope);
 
                 let root_state_digest = self
                     .accumulator
@@ -979,6 +1005,9 @@ impl CheckpointBuilder {
                 self.metrics.highest_accumulated_epoch.set(epoch as i64);
                 info!("Epoch {epoch} root state hash digest: {root_state_digest:?}");
 
+                let check_commit_root_state_digest_supported_scope = monitored_scope(
+                    "CheckpointBuilder::check_commit_root_state_digest_supported_new",
+                );
                 let epoch_commitments = if self
                     .epoch_store
                     .protocol_config()
@@ -988,6 +1017,7 @@ impl CheckpointBuilder {
                 } else {
                     vec![]
                 };
+                drop(check_commit_root_state_digest_supported_scope);
 
                 Some(EndOfEpochData {
                     next_epoch_committee: committee.voting_rights,
@@ -997,15 +1027,20 @@ impl CheckpointBuilder {
                     epoch_commitments,
                 })
             } else {
+                let accumulate_checkpoint_scope =
+                    monitored_scope("CheckpointBuilder::accumulate_checkpoint_new");
                 self.accumulator.accumulate_checkpoint(
                     effects.clone(),
                     sequence_number,
                     self.epoch_store.clone(),
                 )?;
+                drop(accumulate_checkpoint_scope);
 
                 None
             };
 
+            let checkpoint_summary_scope =
+                monitored_scope("CheckpointBuilder::checkpoint_summary_new");
             let contents =
                 CheckpointContents::new_with_causally_ordered_transactions_and_signatures(
                     effects.iter().map(TransactionEffects::execution_digests),
@@ -1043,7 +1078,9 @@ impl CheckpointBuilder {
             }
             last_checkpoint = Some((sequence_number, summary.clone()));
             checkpoints.push((summary, contents));
+            drop(checkpoint_summary_scope);
         }
+        drop(all_chunk_processing_scope);
 
         Ok(checkpoints)
     }
