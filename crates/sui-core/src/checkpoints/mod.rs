@@ -1027,15 +1027,6 @@ impl CheckpointBuilder {
                     epoch_commitments,
                 })
             } else {
-                let accumulate_checkpoint_scope =
-                    monitored_scope("CheckpointBuilder::accumulate_checkpoint_new");
-                self.accumulator.accumulate_checkpoint(
-                    effects.clone(),
-                    sequence_number,
-                    self.epoch_store.clone(),
-                )?;
-                drop(accumulate_checkpoint_scope);
-
                 None
             };
 
