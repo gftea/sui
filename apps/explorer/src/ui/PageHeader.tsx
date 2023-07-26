@@ -60,7 +60,7 @@ export function PageHeader({ title, subtitle, type, before, error }: PageHeaderP
 								</div>
 							)}
 						</div>
-						<div className="ml-2 h-4 w-4 self-center group-hover/gradientContent:!flex group-hover:!flex sm:self-end md:hidden md:h-6 md:w-6">
+						<div className="ml-2 h-4 w-4 self-center sm:self-end md:h-6 md:w-6">
 							<CopyToClipboard size="lg" color="steel" copyText={title} />
 						</div>
 					</div>
