@@ -137,12 +137,6 @@ function NftsPage() {
 		[internalHiddenAssetIds],
 	);
 
-	const hideAsset = (objectId: string, event: React.MouseEvent<HTMLButtonElement>) => {
-		event.stopPropagation();
-		event.preventDefault();
-		hideAssetId(objectId);
-	};
-
 	const handleFilterChange = async (tag: any) => {
 		await setToSessionStorage<string>('NFTS_PAGE_NAVIGATION', tag.link);
 	};

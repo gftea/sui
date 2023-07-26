@@ -78,7 +78,7 @@ export function Kiosk({ object, orientation, ...nftImageProps }: KioskProps) {
 					)}
 				>
 					<Text variant="subtitle" weight="medium">
-						{items?.length}
+						{kiosk?.items.length}
 					</Text>
 				</div>
 			)}
