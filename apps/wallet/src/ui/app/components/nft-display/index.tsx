@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isKioskOwnerToken, useGetObject } from '@mysten/core';
-import { formatAddress } from '@mysten/sui.js';
-import { cva, cx } from 'class-variance-authority';
+import { formatAddress } from '@mysten/sui.js/utils';
+import { cva } from 'class-variance-authority';
 
 import { Kiosk } from './Kiosk';
 import { useResolveVideo } from '../../hooks/useResolveVideo';
@@ -80,7 +80,6 @@ export function NFTDisplayCard({
 					<NftImage
 						name={nftName}
 						src={nftImageUrl}
-						title={nftMeta?.description || ''}
 						animateHover={animateHover}
 						showLabel={shouldShowLabel}
 						borderRadius={borderRadius}
@@ -105,13 +104,11 @@ export function NFTDisplayCard({
 				)}
 
 				{orientation === 'horizontal' ? (
-					<div className="flex-1 text-steel-dark truncate overflow-hidden max-w-full ml-2">
-						{nftName}
-					</div>
+					<div className="flex-1 text-steel-dark overflow-hidden max-w-full ml-2">{nftName}</div>
 				) : !isOwnerToken ? (
-					<div className="w-10/12 absolute bottom-2 px-2 py-1 bg-white/90 rounded-lg left-1/2 -translate-x-1/2 flex items-center justify-center opacity-0 group-hover:opacity-100">
-						<div className="mt-0.5">
-							<Text variant="bodySmall" mono color="steel-darker" truncate>
+					<div className="w-10/12 absolute bottom-2 bg-white/90 rounded-lg left-1/2 -translate-x-1/2 flex items-center justify-center opacity-0 group-hover:opacity-100">
+						<div className="mt-0.5 px-2 py-1 overflow-hidden">
+							<Text variant="subtitleSmall" weight="semibold" mono color="steel-darker" truncate>
 								{nftName}
 							</Text>
 						</div>

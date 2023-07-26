@@ -37,7 +37,7 @@ export default function NonVisualAssets({ items }: { items: SuiObjectData[] }) {
 				</div>
 			) : (
 				<div className="flex flex-1 items-center self-center text-caption font-semibold text-steel-darker">
-					No NFTs found
+					No Assets found
 				</div>
 			)}
 		</div>

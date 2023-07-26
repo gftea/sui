@@ -3,14 +3,16 @@
 
 import { hasDisplayData, isKioskOwnerToken, useGetOwnedObjects } from '@mysten/core';
 import { type SuiObjectData } from '@mysten/sui.js/client';
+import { useMemo } from 'react';
+import { useHiddenAssets } from '../pages/home/hidden-assets/HiddenAssetsProvider';
 
 type OwnedAssets = {
 	visual: SuiObjectData[];
 	other: SuiObjectData[];
-	ownerCaps: SuiObjectData[];
+	hidden: SuiObjectData[];
 };
 
-export enum DisplayTypes {
+export enum AssetFilterTypes {
 	visual = 'visual',
 	other = 'other',
 }
@@ -32,21 +34,26 @@ export function useGetNFTs(address?: string | null) {
 		},
 		50,
 	);
+	const { hiddenAssetIds } = useHiddenAssets();
 
-	const ownedAssets: OwnedAssets = {
-		visual: [],
-		other: [],
-		ownerCaps: [],
-	};
-
-	const assets = data?.pages
-		.flatMap((page) => page.data)
-		.reduce((acc, curr) => {
-			if (hasDisplayData(curr) || isKioskOwnerToken(curr))
-				acc.visual.push(curr.data as SuiObjectData);
-			if (!hasDisplayData(curr)) acc.other.push(curr.data as SuiObjectData);
-			return acc;
-		}, ownedAssets);
+	const assets = useMemo(() => {
+		const ownedAssets: OwnedAssets = {
+			visual: [],
+			other: [],
+			hidden: [],
+		};
+		return data?.pages
+			.flatMap((page) => page.data)
+			.filter((asset) => !hiddenAssetIds.includes(asset.data?.objectId!))
+			.reduce((acc, curr) => {
+				if (hasDisplayData(curr) || isKioskOwnerToken(curr))
+					acc.visual.push(curr.data as SuiObjectData);
+				if (!hasDisplayData(curr)) acc.other.push(curr.data as SuiObjectData);
+				if (hiddenAssetIds.includes(curr.data?.objectId!))
+					acc.hidden.push(curr.data as SuiObjectData);
+				return acc;
+			}, ownedAssets);
+	}, [hiddenAssetIds, data?.pages]);
 
 	return {
 		data: assets,

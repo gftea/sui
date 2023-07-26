@@ -1,10 +1,11 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 import { getKioskIdFromOwnerCap, hasDisplayData, useGetKioskContents } from '@mysten/core';
-import { getObjectDisplay, type SuiObjectResponse } from '@mysten/sui.js';
+
+import { type SuiObjectResponse } from '@mysten/sui.js/client';
+import { getObjectDisplay } from '@mysten/sui.js/types';
 import cl from 'classnames';
 
-import { useMemo } from 'react';
 import { NftImage, type NftImageProps } from './NftImage';
 import { useActiveAddress } from '../../hooks';
 import { Text } from '../../shared/text';
@@ -26,6 +27,12 @@ const cardStyles = [
 	`scale-[0.90] group-hover:rotate-6 group-hover:translate-x-5 group-hover:-translate-y-2 z-10 -translate-y-2 group-hover:shadow-xl`,
 ];
 
+function getLabel(item?: SuiObjectResponse) {
+	if (!item) return;
+	const display = getObjectDisplay(item)?.data;
+	return display?.name ?? display?.description ?? item.data?.objectId;
+}
+
 export function Kiosk({ object, orientation, ...nftImageProps }: KioskProps) {
 	const address = useActiveAddress();
 	const { data: kioskData, isLoading } = useGetKioskContents(address);
@@ -38,13 +45,8 @@ export function Kiosk({ object, orientation, ...nftImageProps }: KioskProps) {
 	const imagesToDisplay = orientation !== 'horizontal' ? 3 : 1;
 	const items = kiosk?.items.slice(0, imagesToDisplay) ?? [];
 
-	// get the display data for the first item to show on hover
-	const displayItem = items[0];
-	const displayName = useMemo(() => {
-		if (!displayItem) return object.data?.objectId;
-		const display = getObjectDisplay(displayItem)?.data;
-		return display?.name ?? display?.description ?? object.data?.objectId;
-	}, [displayItem, object.data?.objectId]);
+	// get the label for the first item to show on hover
+	const displayName = getLabel(items[0]);
 
 	if (isLoading) return null;
 
@@ -86,11 +88,13 @@ export function Kiosk({ object, orientation, ...nftImageProps }: KioskProps) {
 						'bottom-1.5 absolute gap-3 flex items-center justify-end w-full overflow-hidden px-2',
 					)}
 				>
-					<div className="flex items-center justify-center group-hover:opacity-100 opacity-0 px-2 py-1 bg-white/90 rounded-md overflow-hidden">
-						<Text variant="bodySmall" mono color="steel-darker" truncate>
-							{displayName}
-						</Text>
-					</div>
+					{displayName ? (
+						<div className="flex items-center justify-center group-hover:opacity-100 opacity-0 px-2 py-1.5 bg-white/90 rounded-md overflow-hidden">
+							<Text variant="subtitleSmall" weight="semibold" mono color="steel-darker" truncate>
+								{displayName}
+							</Text>
+						</div>
+					) : null}
 
 					<div className="flex-shrink-0 flex items-center justify-center h-6 w-6 bg-gray-100 text-white rounded-md">
 						<Text variant="subtitle" weight="medium">

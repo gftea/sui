@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { KIOSK_ITEM, fetchKiosk, getOwnedKiosks } from '@mysten/kiosk';
+import { KIOSK_ITEM, KioskItem, fetchKiosk, getOwnedKiosks } from '@mysten/kiosk';
 import { useQuery } from '@tanstack/react-query';
 import { useRpcClient } from '../api/RpcClientContext';
 import { ORIGINBYTE_KIOSK_OWNER_TOKEN, getKioskIdFromOwnerCap } from '../utils/kiosk';
@@ -13,14 +13,14 @@ export enum KioskTypes {
 }
 
 export type Kiosk = {
-	items: SuiObjectResponse[];
+	items: Partial<SuiObjectResponse & KioskItem>[];
 	itemIds: string[];
 	kioskId: string;
 	type: KioskTypes;
 	ownerCap?: string;
 };
 
-async function getOriginByteKioskContents(address: string, client: SuiClient): Promise<Kiosk[]> {
+async function getOriginByteKioskContents(address: string, client: SuiClient) {
 	const data = await client.getOwnedObjects({
 		owner: address,
 		filter: {
@@ -83,13 +83,13 @@ async function getSuiKioskContents(address: string, client: SuiClient) {
 				ids: kiosk.data.itemIds,
 				options: { showDisplay: true, showContent: true },
 			});
-			// const items = contents.map((object) => {
-			// 	const kioskData = kiosk.data.items.find((item) => item.objectId === object.data?.objectId);
-			// 	return { ...object, ...kioskData, kioskId: id };
-			// });
+			const items = contents.map((object) => {
+				const kioskData = kiosk.data.items.find((item) => item.objectId === object.data?.objectId);
+				return { ...object, ...kioskData, kioskId: id };
+			});
 			return {
 				itemIds: kiosk.data.itemIds,
-				items: contents,
+				items,
 				kioskId: id,
 				type: KioskTypes.SUI,
 				ownerCap: ownedKiosks.kioskOwnerCaps.find((k) => k.kioskId === id)?.objectId,
@@ -105,7 +105,6 @@ export function useGetKioskContents(address?: string | null, disableOriginByteKi
 		// eslint-disable-next-line @tanstack/query/exhaustive-deps
 		queryKey: ['get-kiosk-contents', address, disableOriginByteKiosk],
 		queryFn: async () => {
-			console.log('here');
 			const suiKiosks = await getSuiKioskContents(address!, rpc);
 			const obKiosks = await getOriginByteKioskContents(address!, rpc);
 			return [...suiKiosks, ...obKiosks];
