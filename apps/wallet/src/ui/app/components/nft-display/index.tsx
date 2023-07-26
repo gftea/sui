@@ -103,21 +103,18 @@ export function NFTDisplayCard({
 						</div>
 					</div>
 				)}
-				"
+
 				{orientation === 'horizontal' ? (
 					<div className="flex-1 text-steel-dark truncate overflow-hidden max-w-full ml-2">
 						{nftName}
 					</div>
 				) : !isOwnerToken ? (
-					<div className="absolute bottom-2 w-full px-2">
-						<div>test</div>
-						{/* <div className="flex w-10/12 overflow-hidden transition-opacity group-hover:opacity-100 opacity-100 duration-100 ease-ease-in-out-cubic">
-							<div className="px-2 py-1 bg-white/90 rounded-lg mt-0.5 absolute bottom-2 left-1/2 -translate-x-1/2">
-								<Text variant="bodySmall" mono color="steel-darker" truncate>
-									{nftName}
-								</Text>
-							</div>
-						</div> */}
+					<div className="w-10/12 absolute bottom-2 px-2 py-1 bg-white/90 rounded-lg left-1/2 -translate-x-1/2 flex items-center justify-center opacity-0 group-hover:opacity-100">
+						<div className="mt-0.5">
+							<Text variant="bodySmall" mono color="steel-darker" truncate>
+								{nftName}
+							</Text>
+						</div>
 					</div>
 				) : null}
 			</Loading>
