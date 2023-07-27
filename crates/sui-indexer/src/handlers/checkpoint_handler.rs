@@ -8,7 +8,7 @@ use futures::StreamExt;
 use jsonrpsee::http_client::HttpClient;
 use lru::LruCache;
 use move_core_types::ident_str;
-use mysten_metrics::get_metrics_or_init;
+use mysten_metrics::get_metrics;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
@@ -118,9 +118,10 @@ where
         metrics: IndexerMetrics,
         config: &IndexerConfig,
     ) -> Self {
+        let global_metrics = get_metrics().unwrap();
         let (tx_indexing_sender, tx_indexing_receiver) = mysten_metrics::metered_channel::channel(
             CHECKPOINT_QUEUE_LIMIT,
-            &get_metrics_or_init()
+            &global_metrics
                 .channels
                 .with_label_values(&["checkpoint_tx_indexing"]),
         );
@@ -128,7 +129,7 @@ where
         let (object_indexing_sender, object_indexing_receiver) =
             mysten_metrics::metered_channel::channel(
                 CHECKPOINT_QUEUE_LIMIT,
-                &get_metrics_or_init()
+                &global_metrics
                     .channels
                     .with_label_values(&["checkpoint_object_indexing"]),
             );
@@ -136,7 +137,7 @@ where
         let (epoch_indexing_sender, epoch_indexing_receiver) =
             mysten_metrics::metered_channel::channel(
                 EPOCH_QUEUE_LIMIT,
-                &get_metrics_or_init()
+                &global_metrics
                     .channels
                     .with_label_values(&["checkpoint_epoch_indexing"]),
             );
@@ -170,7 +171,8 @@ where
         let (downloaded_checkpoint_data_sender, downloaded_checkpoint_data_receiver) =
             mysten_metrics::metered_channel::channel(
                 DOWNLOAD_QUEUE_SIZE,
-                &get_metrics_or_init()
+                &get_metrics()
+                    .unwrap()
                     .channels
                     .with_label_values(&["checkpoint_tx_downloading"]),
             );
@@ -238,7 +240,8 @@ where
         let (downloaded_object_data_sender, downloaded_object_data_receiver) =
             mysten_metrics::metered_channel::channel(
                 DOWNLOAD_QUEUE_SIZE,
-                &get_metrics_or_init()
+                &get_metrics()
+                    .unwrap()
                     .channels
                     .with_label_values(&["checkpoint_object_downloading"]),
             );
@@ -426,9 +429,11 @@ where
             while let Some(res) = download_futures.next().await {
                 match res {
                     Ok(checkpoint) => {
+                        let checkpoint_seq = checkpoint.checkpoint.sequence_number;
                         tx.send(checkpoint)
                             .await
                             .expect("Send to checkpoint channel should not fail");
+                        info!(checkpoint_seq, "Sent to CheckpointProcessor.");
                         next_cursor_sequence_number += 1;
                     }
                     Err(e) => {
@@ -1083,7 +1088,10 @@ where
                 .recv()
                 .await
                 .expect("Sender of Checkpoint Processor's rx should not be closed.");
-
+            info!(
+                checkpoint_seq = checkpoint_data.checkpoint.sequence_number,
+                "Checkpoint received by indexing processor"
+            );
             // Index checkpoint data
             let index_timer = self.metrics.checkpoint_index_latency.start_timer();
 
@@ -1098,10 +1106,6 @@ where
                         );
                     })?;
             index_timer.stop_and_record();
-            info!(
-                checkpoint_seq = checkpoint.checkpoint.sequence_number,
-                "Checkpoint received by indexing processor"
-            );
 
             // commit first epoch immediately, send other epochs to channel to be committed later.
             if let Some(epoch) = epoch {
