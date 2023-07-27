@@ -54,7 +54,7 @@ export function ImportRecoveryPhraseForm({ onSubmit }: ImportRecoveryPhraseFormP
 					{mnemonic.map((_, index) => {
 						const mnemonicId = `mnemonic.${index}` as const;
 						return (
-							<label key={index} className="flex flex-col flex-nowrap gap-1.5 items-center">
+							<label key={index} className="flex flex-col gap-1.5 items-center">
 								<Text variant="captionSmall" weight="medium" color="steel-darker">
 									{index + 1}
 								</Text>
