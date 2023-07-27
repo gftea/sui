@@ -43,7 +43,10 @@ export function ImportRecoveryPhraseForm({ onSubmit }: ImportRecoveryPhraseFormP
 	const mnemonic = getValues('mnemonic');
 
 	return (
-		<form className="flex flex-col relative h-full" onSubmit={handleSubmit(onSubmit)}>
+		<form
+			className="flex flex-col justify-between relative h-full"
+			onSubmit={handleSubmit(onSubmit)}
+		>
 			<fieldset className="border-0 m-0 p-0">
 				<legend className="pl-2.5">
 					<Text variant="pBody" color="steel-darker" weight="semibold">
@@ -97,7 +100,7 @@ export function ImportRecoveryPhraseForm({ onSubmit }: ImportRecoveryPhraseFormP
 					})}
 				</div>
 			</fieldset>
-			<div className="flex flex-col gap-2.5 pt-3 bg-sui-lightest sticky -bottom-7.5 px-6 pb-7.5 -mx-6 -mb-7.5 mt-auto">
+			<div className="flex flex-col gap-2.5 pt-3 bg-sui-lightest sticky -bottom-7.5 px-6 pb-7.5 -mx-6 -mb-7.5">
 				{touchedFields.mnemonic && errors.mnemonic && <Alert>{errors.mnemonic.message}</Alert>}
 				<div className="flex gap-2.5">
 					<Button variant="outline" size="tall" text="Cancel" onClick={() => navigate(-1)} />
