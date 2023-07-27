@@ -1105,7 +1105,7 @@ where
                             e.to_string()
                         );
                     })?;
-            index_timer.stop_and_record();
+            let elapsed = index_timer.stop_and_record();
 
             // commit first epoch immediately, send other epochs to channel to be committed later.
             if let Some(epoch) = epoch {
@@ -1136,6 +1136,7 @@ where
             let seq = checkpoint.checkpoint.sequence_number;
             info!(
                 checkpoint_seq = seq,
+                elapsed,
                 "Checkpoint indexing finished, about to sending to commit handler"
             );
             let checkpoint_sender_guard = self.checkpoint_sender.lock().await;
