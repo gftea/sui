@@ -7,9 +7,9 @@ import { normalizeMnemonics, validateMnemonics } from '_src/shared/utils/bip39';
 
 export const mnemonicValidation = Yup.array()
 	.of(Yup.string().ensure().trim())
+	.defined()
 	.transform((mnemonic: string[]) => normalizeMnemonics(mnemonic.join(' ')).split(' '))
 	.test('mnemonic-valid', 'Recovery Passphrase is invalid', (mnemonic) => {
-		return validateMnemonics(mnemonic?.join(' ') || '');
+		return validateMnemonics(mnemonic.join(' '));
 	})
-	.label('Recovery Passphrase')
-	.defined();
+	.label('Recovery Passphrase');
