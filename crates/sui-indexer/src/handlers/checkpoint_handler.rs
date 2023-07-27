@@ -405,11 +405,19 @@ where
         let mut next_cursor_sequence_number = starting_checkpoint_seq;
         // NOTE: we will download checkpoints in parallel, but we will commit them sequentially.
         // We will start with MAX_PARALLEL_DOWNLOADS, and adjust if no more checkpoints are available.
-        let current_parallel_downloads = MAX_PARALLEL_DOWNLOADS;
+        let current_parallel_downloads = env::var("MAX_PARALLEL_DOWNLOADS")
+            .unwrap_or(MAX_PARALLEL_DOWNLOADS.to_string())
+            .parse::<u64>()
+            .unwrap();
         loop {
+            info!(
+                "Kicking off checkpoint txes downloading {} - {}",
+                next_cursor_sequence_number,
+                next_cursor_sequence_number + current_parallel_downloads - 1
+            );
             let mut download_futures = FuturesOrdered::new();
             for seq_num in next_cursor_sequence_number
-                ..next_cursor_sequence_number + current_parallel_downloads as u64
+                ..next_cursor_sequence_number + current_parallel_downloads
             {
                 download_futures.push_back(self.download_checkpoint_txes_data(seq_num));
             }
@@ -445,11 +453,20 @@ where
         let mut next_cursor_sequence_number = starting_checkpoint_seq;
         // NOTE: we will download checkpoints in parallel, but we will commit them sequentially.
         // We will start with MAX_PARALLEL_DOWNLOADS, and adjust if no more checkpoints are available.
-        let current_parallel_downloads = MAX_PARALLEL_DOWNLOADS;
+        let current_parallel_downloads = env::var("MAX_PARALLEL_DOWNLOADS")
+            .unwrap_or(MAX_PARALLEL_DOWNLOADS.to_string())
+            .parse::<u64>()
+            .unwrap();
+
         loop {
             let mut download_futures = FuturesOrdered::new();
+            info!(
+                "Kicking off checkpoint objects downloading {} - {}",
+                next_cursor_sequence_number,
+                next_cursor_sequence_number + current_parallel_downloads - 1
+            );
             for seq_num in next_cursor_sequence_number
-                ..next_cursor_sequence_number + current_parallel_downloads as u64
+                ..next_cursor_sequence_number + current_parallel_downloads
             {
                 download_futures.push_back(self.download_checkpoint_objects_data(seq_num));
             }
@@ -488,12 +505,20 @@ where
             let mut indexed_checkpoint_batch: Vec<TemporaryCheckpointStore> = vec![];
             loop {
                 if let Ok(ckp) = checkpoint_receiver_guard.try_recv() {
+                    info!(
+                        checkpoint_seq = ckp.checkpoint.sequence_number,
+                        "Checkpoint committer received tx."
+                    );
                     indexed_checkpoint_batch.push(ckp);
                     if indexed_checkpoint_batch.len() >= checkpoint_commit_batch_size as usize {
                         break;
                     }
                 } else if indexed_checkpoint_batch.is_empty() {
                     if let Some(ckp) = checkpoint_receiver_guard.recv().await {
+                        info!(
+                            checkpoint_seq = ckp.checkpoint.sequence_number,
+                            "Checkpoint committer received tx."
+                        );
                         indexed_checkpoint_batch.push(ckp);
                         break;
                     }
@@ -585,7 +610,6 @@ where
             }
 
             // now commit batched data
-            info!("About to commit checkpoint & transaction data...");
             let tx_batch = tx_batch.into_iter().flatten().collect::<Vec<_>>();
             let checkpoint_tx_db_guard = self.metrics.checkpoint_db_commit_latency.start_timer();
             let mut checkpoint_tx_commit_res = self
@@ -655,6 +679,10 @@ where
                 if let Ok((seq, object_changes)) = checkpoint_receiver_guard.try_recv() {
                     object_changes_batch.push(object_changes);
                     seqs.push(seq);
+                    info!(
+                        checkpoint_seq = seq,
+                        "Checkpoint committer received object changes."
+                    );
                     if object_changes_batch.len() >= checkpoint_commit_batch_size as usize {
                         break;
                     }
@@ -662,6 +690,10 @@ where
                     if let Some((seq, object_changes)) = checkpoint_receiver_guard.recv().await {
                         object_changes_batch.push(object_changes);
                         seqs.push(seq);
+                        info!(
+                            checkpoint_seq = seq,
+                            "Checkpoint committer received object changes."
+                        );
                         break;
                     }
                 } else {
@@ -1066,6 +1098,10 @@ where
                         );
                     })?;
             index_timer.stop_and_record();
+            info!(
+                checkpoint_seq = checkpoint.checkpoint.sequence_number,
+                "Checkpoint received by indexing processor"
+            );
 
             // commit first epoch immediately, send other epochs to channel to be committed later.
             if let Some(epoch) = epoch {
@@ -1093,13 +1129,14 @@ where
                     drop(epoch_sender_guard);
                 }
             }
-
+            let seq = checkpoint.checkpoint.sequence_number;
             let checkpoint_sender_guard = self.checkpoint_sender.lock().await;
             // NOTE: when the channel is full, checkpoint_sender_guard will wait until the channel has space.
             // Checkpoints are sent sequentially to stick to the order of checkpoint sequence numbers.
             checkpoint_sender_guard
                 .send(checkpoint)
                 .await
+                .tap_ok(|_| info!(checkpoint_seq = seq, "Checkpoint sent to commit handler"))
                 .unwrap_or_else(|e| {
                     panic!(
                         "checkpoint channel send should not fail, but got error: {:?}",
@@ -1332,7 +1369,7 @@ where
                 .await
                 .expect("Sender of Checkpoint Processor's rx should not be closed.");
             let checkpoint_seq = checkpoint_data.checkpoint_seq;
-
+            info!(checkpoint_seq, "Objects received by indexing processor");
             // Index checkpoint data
             let index_timer = self.metrics.checkpoint_index_latency.start_timer();
 
@@ -1353,6 +1390,7 @@ where
                 .await
                 .send((checkpoint_seq, object_changes))
                 .await
+                .tap_ok(|_| info!(checkpoint_seq, "Objects sent to commit handler"))
                 .unwrap_or_else(|e| {
                     panic!(
                         "checkpoint channel send should not fail, but got error: {:?}",
