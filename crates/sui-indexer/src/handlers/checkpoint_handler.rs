@@ -1134,6 +1134,10 @@ where
                 }
             }
             let seq = checkpoint.checkpoint.sequence_number;
+            info!(
+                checkpoint_seq = seq,
+                "Checkpoint indexing finished, about to sending to commit handler"
+            );
             let checkpoint_sender_guard = self.checkpoint_sender.lock().await;
             // NOTE: when the channel is full, checkpoint_sender_guard will wait until the channel has space.
             // Checkpoints are sent sequentially to stick to the order of checkpoint sequence numbers.
