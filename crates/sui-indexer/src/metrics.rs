@@ -28,9 +28,12 @@ pub struct IndexerMetrics {
     pub latest_indexer_object_checkpoint_sequence_number: IntGauge,
     // checkpoint E2E latency is:
     // fullnode_download_latency + checkpoint_index_latency + db_commit_latency
+    pub fullnode_checkpoint_data_download_latency: Histogram,
     pub fullnode_checkpoint_wait_and_download_latency: Histogram,
     pub fullnode_transaction_download_latency: Histogram,
     pub fullnode_object_download_latency: Histogram,
+    pub fullnode_object_cache_hit: IntCounter,
+    pub fullnode_object_cache_miss: IntCounter,
     pub checkpoint_index_latency: Histogram,
     pub checkpoint_objects_index_latency: Histogram,
     pub checkpoint_db_commit_latency: Histogram,
@@ -115,6 +118,18 @@ impl IndexerMetrics {
                 registry,
             )
             .unwrap(),
+            fullnode_object_cache_hit: register_int_counter_with_registry!(
+                "fullnode_object_cache_hit",
+                "Total number of cache hit for checkpoint object data",
+                registry,
+            )
+            .unwrap(),
+            fullnode_object_cache_miss: register_int_counter_with_registry!(
+                "fullnode_object_cache_miss",
+                "Total number of cache miss for checkpoint object data",
+                registry,
+            )
+            .unwrap(),
             latest_fullnode_checkpoint_sequence_number: register_int_gauge_with_registry!(
                 "latest_fullnode_checkpoint_sequence_number",
                 "Latest checkpoint sequence number from the Full Node",
@@ -133,6 +148,13 @@ impl IndexerMetrics {
                 registry,
             )
             .unwrap(),
+            fullnode_checkpoint_data_download_latency: register_histogram_with_registry!(
+                "fullnode_checkpoint_data_download_latency",
+                "Time spent in downloading checkpoint and transation for a new checkpoint from the Full Node",
+                LATENCY_SEC_BUCKETS.to_vec(),
+                registry,
+            )
+            .unwrap(),
             fullnode_checkpoint_wait_and_download_latency: register_histogram_with_registry!(
                 "fullnode_checkpoint_wait_and_download_latency",
                 "Time spent in waiting for a new checkpoint from the Full Node",
@@ -140,6 +162,7 @@ impl IndexerMetrics {
                 registry,
             )
             .unwrap(),
+
             fullnode_transaction_download_latency: register_histogram_with_registry!(
                 "fullnode_transaction_download_latency",
                 "Time spent in waiting for a new transaction from the Full Node",
