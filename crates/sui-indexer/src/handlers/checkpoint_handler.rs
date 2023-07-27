@@ -62,9 +62,9 @@ const DOWNLOAD_RETRY_INTERVAL_IN_SECS: u64 = 10;
 const CHECKPOINT_INDEX_RETRY_INTERVAL_IN_SECS: u64 = 10;
 const DB_COMMIT_RETRY_INTERVAL_IN_MILLIS: u64 = 100;
 const MULTI_GET_CHUNK_SIZE: usize = 50;
-const CHECKPOINT_QUEUE_LIMIT: usize = 24;
+const CHECKPOINT_QUEUE_SIZE: usize = 50;
 const DOWNLOAD_QUEUE_SIZE: usize = 10000;
-const EPOCH_QUEUE_LIMIT: usize = 2;
+const EPOCH_QUEUE_LIMIT: usize = 20;
 
 #[allow(clippy::type_complexity)]
 pub struct CheckpointHandler<S> {
@@ -110,9 +110,13 @@ where
         metrics: IndexerMetrics,
         config: &IndexerConfig,
     ) -> Self {
+        let checkpoint_queue_size = env::var("CHECKPOINT_QUEUE_SIZE")
+            .unwrap_or(CHECKPOINT_QUEUE_SIZE.to_string())
+            .parse::<usize>()
+            .unwrap();
         let global_metrics = get_metrics().unwrap();
         let (tx_indexing_sender, tx_indexing_receiver) = mysten_metrics::metered_channel::channel(
-            CHECKPOINT_QUEUE_LIMIT,
+            checkpoint_queue_size,
             &global_metrics
                 .channels
                 .with_label_values(&["checkpoint_tx_indexing"]),
@@ -120,7 +124,7 @@ where
 
         let (object_indexing_sender, object_indexing_receiver) =
             mysten_metrics::metered_channel::channel(
-                CHECKPOINT_QUEUE_LIMIT,
+                checkpoint_queue_size,
                 &global_metrics
                     .channels
                     .with_label_values(&["checkpoint_object_indexing"]),
