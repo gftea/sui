@@ -67,36 +67,28 @@ const DOWNLOAD_QUEUE_SIZE: usize = 10000;
 const EPOCH_QUEUE_LIMIT: usize = 2;
 
 #[allow(clippy::type_complexity)]
-#[derive(Clone)]
 pub struct CheckpointHandler<S> {
     state: S,
     http_client: HttpClient,
     metrics: IndexerMetrics,
     config: IndexerConfig,
-    // FIXME: these do not need to be Arc<Mutex<>>
-    tx_indexing_sender:
-        Arc<Mutex<mysten_metrics::metered_channel::Sender<TemporaryCheckpointStore>>>,
+    tx_indexing_sender: Arc<mysten_metrics::metered_channel::Sender<TemporaryCheckpointStore>>,
     tx_indexing_receiver:
-        Arc<Mutex<mysten_metrics::metered_channel::Receiver<TemporaryCheckpointStore>>>,
+        Option<mysten_metrics::metered_channel::Receiver<TemporaryCheckpointStore>>,
     object_indexing_sender: Arc<
-        Mutex<
-            mysten_metrics::metered_channel::Sender<(
-                CheckpointSequenceNumber,
-                Vec<TransactionObjectChanges>,
-            )>,
-        >,
+        mysten_metrics::metered_channel::Sender<(
+            CheckpointSequenceNumber,
+            Vec<TransactionObjectChanges>,
+        )>,
     >,
-    object_indexing_receiver: Arc<
-        Mutex<
-            mysten_metrics::metered_channel::Receiver<(
-                CheckpointSequenceNumber,
-                Vec<TransactionObjectChanges>,
-            )>,
-        >,
+    object_indexing_receiver: Option<
+        mysten_metrics::metered_channel::Receiver<(
+            CheckpointSequenceNumber,
+            Vec<TransactionObjectChanges>,
+        )>,
     >,
-    epoch_indexing_sender: Arc<Mutex<mysten_metrics::metered_channel::Sender<TemporaryEpochStore>>>,
-    epoch_indexing_receiver:
-        Arc<Mutex<mysten_metrics::metered_channel::Receiver<TemporaryEpochStore>>>,
+    epoch_indexing_sender: Arc<mysten_metrics::metered_channel::Sender<TemporaryEpochStore>>,
+    epoch_indexing_receiver: Option<mysten_metrics::metered_channel::Receiver<TemporaryEpochStore>>,
     checkpoint_data_cache: Arc<
         Mutex<
             LruCache<
@@ -154,20 +146,26 @@ where
             http_client,
             metrics,
             config: config.clone(),
-            tx_indexing_sender: Arc::new(Mutex::new(tx_indexing_sender)),
-            tx_indexing_receiver: Arc::new(Mutex::new(tx_indexing_receiver)),
-            object_indexing_sender: Arc::new(Mutex::new(object_indexing_sender)),
-            object_indexing_receiver: Arc::new(Mutex::new(object_indexing_receiver)),
-            epoch_indexing_sender: Arc::new(Mutex::new(epoch_indexing_sender)),
-            epoch_indexing_receiver: Arc::new(Mutex::new(epoch_indexing_receiver)),
+            tx_indexing_sender: Arc::new(tx_indexing_sender),
+            tx_indexing_receiver: Some(tx_indexing_receiver),
+            object_indexing_sender: Arc::new(object_indexing_sender),
+            object_indexing_receiver: Some(object_indexing_receiver),
+            epoch_indexing_sender: Arc::new(epoch_indexing_sender),
+            epoch_indexing_receiver: Some(epoch_indexing_receiver),
             checkpoint_data_cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             ))),
         }
     }
 
-    pub fn spawn(self) -> JoinHandle<()> {
+    pub fn spawn(mut self) -> JoinHandle<()> {
         info!("Indexer checkpoint handler started...");
+        let mut tx_indexing_receiver = self.tx_indexing_receiver.take().unwrap();
+        let mut object_indexing_receiver = self.object_indexing_receiver.take().unwrap();
+        let mut epoch_indexing_receiver = self.epoch_indexing_receiver.take().unwrap();
+
+        let arc_self = Arc::new(self);
+
         let (downloaded_checkpoint_data_sender, downloaded_checkpoint_data_receiver) =
             mysten_metrics::metered_channel::channel(
                 DOWNLOAD_QUEUE_SIZE,
@@ -177,7 +175,7 @@ where
                     .with_label_values(&["checkpoint_tx_downloading"]),
             );
 
-        let self_clone = self.clone();
+        let self_clone = arc_self.clone();
         // Start Checkpoint/Tx Downloader
         spawn_monitored_task!(async move {
             // -1 will be returned when checkpoints table is empty.
@@ -195,10 +193,10 @@ where
         });
         // Start Checkpoint/Tx Indexing Processor
         let mut checkpoint_processor = CheckpointProcessor {
-            state: self.state.clone(),
-            metrics: self.metrics.clone(),
-            epoch_indexing_sender: self.epoch_indexing_sender.clone(),
-            checkpoint_sender: self.tx_indexing_sender.clone(),
+            state: arc_self.state.clone(),
+            metrics: arc_self.metrics.clone(),
+            epoch_indexing_sender: arc_self.epoch_indexing_sender.clone(),
+            checkpoint_sender: arc_self.tx_indexing_sender.clone(),
             downloaded_checkpoint_data_receiver,
         };
         spawn_monitored_task!(async move {
@@ -216,10 +214,10 @@ where
             }
         });
         // Start Checkpoint/Tx Commit Handler
-        let tx_checkpoint_commit_handler = self.clone();
+        let tx_checkpoint_commit_handler = arc_self.clone();
         spawn_monitored_task!(async move {
             let mut checkpoint_commit_res = tx_checkpoint_commit_handler
-                .start_tx_checkpoint_commit()
+                .start_tx_checkpoint_commit(&mut tx_indexing_receiver)
                 .await;
             while let Err(e) = &checkpoint_commit_res {
                 warn!(
@@ -231,7 +229,7 @@ where
                 ))
                 .await;
                 checkpoint_commit_res = tx_checkpoint_commit_handler
-                    .start_tx_checkpoint_commit()
+                    .start_tx_checkpoint_commit(&mut tx_indexing_receiver)
                     .await;
             }
         });
@@ -246,7 +244,7 @@ where
                     .with_label_values(&["checkpoint_object_downloading"]),
             );
 
-        let self_clone = self.clone();
+        let self_clone = arc_self.clone();
         spawn_monitored_task!(async move {
             // -1 will be returned when checkpoints table is empty.
             let last_seq_from_db = self_clone
@@ -264,10 +262,10 @@ where
 
         // Start Checkpoint Objects Indexing Processor
         let mut checkpoint_objects_processor = CheckpointObjectsProcessor {
-            metrics: self.metrics.clone(),
-            object_indexing_sender: self.object_indexing_sender.clone(),
+            metrics: arc_self.metrics.clone(),
+            object_indexing_sender: arc_self.object_indexing_sender.clone(),
             downloaded_object_data_receiver,
-            checkpoint_handler: self.clone(),
+            checkpoint_handler: arc_self.clone(),
         };
         spawn_monitored_task!(async move {
             let mut res = checkpoint_objects_processor.run().await;
@@ -285,10 +283,10 @@ where
         });
 
         // Start Checkpoint Objects Commit Handler
-        let object_checkpoint_commit_handler = self.clone();
+        let object_checkpoint_commit_handler = arc_self.clone();
         spawn_monitored_task!(async move {
             let mut checkpoint_commit_res = object_checkpoint_commit_handler
-                .start_object_checkpoint_commit()
+                .start_object_checkpoint_commit(&mut object_indexing_receiver)
                 .await;
             while let Err(e) = &checkpoint_commit_res {
                 warn!(
@@ -300,15 +298,17 @@ where
                 ))
                 .await;
                 checkpoint_commit_res = object_checkpoint_commit_handler
-                    .start_object_checkpoint_commit()
+                    .start_object_checkpoint_commit(&mut object_indexing_receiver)
                     .await;
             }
         });
 
         // Start Epoch Commit Handler
-        let epoch_commit_handler = self.clone();
+        let epoch_commit_handler = arc_self.clone();
         spawn_monitored_task!(async move {
-            let mut epoch_commit_res = epoch_commit_handler.start_epoch_commit().await;
+            let mut epoch_commit_res = epoch_commit_handler
+                .start_epoch_commit(&mut epoch_indexing_receiver)
+                .await;
             while let Err(e) = &epoch_commit_res {
                 warn!(
                     "Indexer epoch commit failed with error: {:?}, retrying after {:?} secs...",
@@ -318,13 +318,15 @@ where
                     DOWNLOAD_RETRY_INTERVAL_IN_SECS,
                 ))
                 .await;
-                epoch_commit_res = epoch_commit_handler.start_epoch_commit().await;
+                epoch_commit_res = epoch_commit_handler
+                    .start_epoch_commit(&mut epoch_indexing_receiver)
+                    .await;
             }
         });
 
         // Start Fullnode checkpoint sequence number updater
-        let metrics = self.metrics;
-        let http_client = self.http_client;
+        let metrics = arc_self.metrics.clone();
+        let http_client = arc_self.http_client.clone();
         spawn_monitored_task!(async move {
             loop {
                 if let Ok(latest_fn_checkpoint_seq) = http_client
@@ -351,7 +353,7 @@ where
 
     // FIXME: refactor and get rid of the duplicated code
     pub async fn run_checkpoint_txes_downloader(
-        checkpoint_download_handler: Self,
+        checkpoint_download_handler: Arc<Self>,
         mut start_seq: u64,
         tx: mysten_metrics::metered_channel::Sender<CheckpointTxData>,
     ) {
@@ -375,7 +377,7 @@ where
         }
     }
     pub async fn run_checkpoint_objects_downloader(
-        checkpoint_download_handler: Self,
+        checkpoint_download_handler: Arc<Self>,
         mut start_seq: u64,
         tx: mysten_metrics::metered_channel::Sender<CheckpointObjectData>,
     ) {
@@ -496,7 +498,12 @@ where
         }
     }
 
-    async fn start_tx_checkpoint_commit(&self) -> Result<(), IndexerError> {
+    async fn start_tx_checkpoint_commit(
+        self: &Arc<Self>,
+        tx_indexing_receiver: &mut mysten_metrics::metered_channel::Receiver<
+            TemporaryCheckpointStore,
+        >,
+    ) -> Result<(), IndexerError> {
         info!("Indexer checkpoint commit task started...");
         let checkpoint_commit_batch_size = env::var("CHECKPOINT_COMMIT_BATCH_SIZE")
             .unwrap_or(5.to_string())
@@ -505,11 +512,9 @@ where
         info!("Using checkpoint commit batch size {checkpoint_commit_batch_size}");
 
         loop {
-            let mut checkpoint_receiver_guard = self.tx_indexing_receiver.lock().await;
-
             let mut indexed_checkpoint_batch: Vec<TemporaryCheckpointStore> = vec![];
             loop {
-                if let Ok(ckp) = checkpoint_receiver_guard.try_recv() {
+                if let Ok(ckp) = tx_indexing_receiver.try_recv() {
                     info!(
                         checkpoint_seq = ckp.checkpoint.sequence_number,
                         "Checkpoint committer received tx."
@@ -519,7 +524,7 @@ where
                         break;
                     }
                 } else if indexed_checkpoint_batch.is_empty() {
-                    if let Some(ckp) = checkpoint_receiver_guard.recv().await {
+                    if let Some(ckp) = tx_indexing_receiver.recv().await {
                         info!(
                             checkpoint_seq = ckp.checkpoint.sequence_number,
                             "Checkpoint committer received tx."
@@ -531,7 +536,6 @@ where
                     break;
                 }
             }
-            drop(checkpoint_receiver_guard);
 
             let mut checkpoint_batch = vec![];
             let mut tx_batch = vec![];
@@ -669,19 +673,23 @@ where
         }
     }
 
-    async fn start_object_checkpoint_commit(&self) -> Result<(), IndexerError> {
+    async fn start_object_checkpoint_commit(
+        &self,
+        object_indexing_receiver: &mut mysten_metrics::metered_channel::Receiver<(
+            CheckpointSequenceNumber,
+            Vec<TransactionObjectChanges>,
+        )>,
+    ) -> Result<(), IndexerError> {
         info!("Indexer object checkpoint commit task started...");
         let checkpoint_commit_batch_size = env::var("CHECKPOINT_COMMIT_BATCH_SIZE")
             .unwrap_or(5.to_string())
             .parse::<u64>()
             .unwrap();
         loop {
-            let mut checkpoint_receiver_guard = self.object_indexing_receiver.lock().await;
-
             let mut object_changes_batch = vec![];
             let mut seqs = vec![];
             loop {
-                if let Ok((seq, object_changes)) = checkpoint_receiver_guard.try_recv() {
+                if let Ok((seq, object_changes)) = object_indexing_receiver.try_recv() {
                     object_changes_batch.push(object_changes);
                     seqs.push(seq);
                     info!(
@@ -692,7 +700,7 @@ where
                         break;
                     }
                 } else if object_changes_batch.is_empty() {
-                    if let Some((seq, object_changes)) = checkpoint_receiver_guard.recv().await {
+                    if let Some((seq, object_changes)) = object_indexing_receiver.recv().await {
                         object_changes_batch.push(object_changes);
                         seqs.push(seq);
                         info!(
@@ -705,7 +713,6 @@ where
                     break;
                 }
             }
-            drop(checkpoint_receiver_guard);
 
             let mut object_change_batch = vec![];
 
@@ -782,12 +789,15 @@ where
         }
     }
 
-    async fn start_epoch_commit(&self) -> Result<(), IndexerError> {
+    async fn start_epoch_commit(
+        &self,
+        epoch_indexing_receiver: &mut mysten_metrics::metered_channel::Receiver<
+            TemporaryEpochStore,
+        >,
+    ) -> Result<(), IndexerError> {
         info!("Indexer epoch commit task started...");
         loop {
-            let mut epoch_receiver_guard = self.epoch_indexing_receiver.lock().await;
-            let indexed_epoch = epoch_receiver_guard.recv().await;
-            drop(epoch_receiver_guard);
+            let indexed_epoch = epoch_indexing_receiver.recv().await;
 
             // Write epoch to DB if needed
             if let Some(indexed_epoch) = indexed_epoch {
@@ -1070,9 +1080,8 @@ where
 {
     state: S,
     metrics: IndexerMetrics,
-    epoch_indexing_sender: Arc<Mutex<mysten_metrics::metered_channel::Sender<TemporaryEpochStore>>>,
-    checkpoint_sender:
-        Arc<Mutex<mysten_metrics::metered_channel::Sender<TemporaryCheckpointStore>>>,
+    epoch_indexing_sender: Arc<mysten_metrics::metered_channel::Sender<TemporaryEpochStore>>,
+    checkpoint_sender: Arc<mysten_metrics::metered_channel::Sender<TemporaryCheckpointStore>>,
     downloaded_checkpoint_data_receiver:
         mysten_metrics::metered_channel::Receiver<CheckpointTxData>,
 }
@@ -1121,28 +1130,24 @@ where
                     self.metrics.total_epoch_committed.inc();
                     info!("Persisted first epoch");
                 } else {
-                    let epoch_sender_guard = self.epoch_indexing_sender.lock().await;
                     // NOTE: when the channel is full, epoch_sender_guard will wait until the channel has space.
-                    epoch_sender_guard.send(epoch).await.map_err(|e| {
+                    self.epoch_indexing_sender.send(epoch).await.map_err(|e| {
                         error!(
                             "Failed to send indexed epoch to epoch commit handler with error {}",
                             e.to_string()
                         );
                         IndexerError::MpscChannelError(e.to_string())
                     })?;
-                    drop(epoch_sender_guard);
                 }
             }
             let seq = checkpoint.checkpoint.sequence_number;
             info!(
                 checkpoint_seq = seq,
-                elapsed,
-                "Checkpoint indexing finished, about to sending to commit handler"
+                elapsed, "Checkpoint indexing finished, about to sending to commit handler"
             );
-            let checkpoint_sender_guard = self.checkpoint_sender.lock().await;
             // NOTE: when the channel is full, checkpoint_sender_guard will wait until the channel has space.
             // Checkpoints are sent sequentially to stick to the order of checkpoint sequence numbers.
-            checkpoint_sender_guard
+            self.checkpoint_sender
                 .send(checkpoint)
                 .await
                 .tap_ok(|_| info!(checkpoint_seq = seq, "Checkpoint sent to commit handler"))
@@ -1152,7 +1157,6 @@ where
                         e
                     )
                 });
-            drop(checkpoint_sender_guard);
         }
     }
 
@@ -1353,17 +1357,14 @@ where
 {
     metrics: IndexerMetrics,
     object_indexing_sender: Arc<
-        Mutex<
-            mysten_metrics::metered_channel::Sender<(
-                CheckpointSequenceNumber,
-                Vec<TransactionObjectChanges>,
-            )>,
-        >,
+        mysten_metrics::metered_channel::Sender<(
+            CheckpointSequenceNumber,
+            Vec<TransactionObjectChanges>,
+        )>,
     >,
     downloaded_object_data_receiver:
         mysten_metrics::metered_channel::Receiver<CheckpointObjectData>,
-    // FIXME: use Arc and remove all Arc<Mutex<>>
-    checkpoint_handler: CheckpointHandler<S>,
+    checkpoint_handler: Arc<CheckpointHandler<S>>,
 }
 
 impl<S> CheckpointObjectsProcessor<S>
@@ -1395,8 +1396,6 @@ where
             index_timer.stop_and_record();
 
             self.object_indexing_sender
-                .lock()
-                .await
                 .send((checkpoint_seq, object_changes))
                 .await
                 .tap_ok(|_| info!(checkpoint_seq, "Objects sent to commit handler"))
@@ -1410,7 +1409,7 @@ where
     }
 
     async fn index_checkpoint_objects(
-        packages_handler: CheckpointHandler<S>,
+        packages_handler: Arc<CheckpointHandler<S>>,
         data: &CheckpointObjectData,
     ) -> Result<Vec<TransactionObjectChanges>, IndexerError> {
         let CheckpointObjectData {
