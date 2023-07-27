@@ -834,18 +834,18 @@ where
             elapsed, "Checkpoint tx data downloaded."
         );
 
-        let effects = checkpoint_tx_data
-            .transactions
-            .iter()
-            .map(|t| (*t.transaction.data.sender(), t.effects.clone()))
-            .collect::<Vec<_>>();
+        // let effects = checkpoint_tx_data
+        //     .transactions
+        //     .iter()
+        //     .map(|t| (*t.transaction.data.sender(), t.effects.clone()))
+        //     .collect::<Vec<_>>();
 
         // Cache preliminary data for object indexing
-        let mut cache = self.checkpoint_data_cache.lock().await;
-        cache.put(
-            checkpoint_tx_data.checkpoint.sequence_number,
-            (checkpoint_tx_data.checkpoint.epoch, effects),
-        );
+        // let mut cache = self.checkpoint_data_cache.lock().await;
+        // cache.put(
+        //     checkpoint_tx_data.checkpoint.sequence_number,
+        //     (checkpoint_tx_data.checkpoint.epoch, effects),
+        // );
 
         Ok(checkpoint_tx_data)
     }
